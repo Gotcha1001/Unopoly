@@ -4,17 +4,16 @@
 // import type { Id } from "./_generated/dataModel";
 // import { internal } from "./_generated/api";
 
-// // ─── Deck Helpers ────────────────────────────────────────────────────────────
-
+// // ─── Deck Helpers ────────────────────────────────────────────────────
 // const COLORS = ["red", "blue", "green", "yellow"] as const;
 // const NUMBERS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 // const ACTIONS = ["skip", "reverse", "draw2"];
 // const WILDS = ["wild", "wild_draw4"];
 
-// // ─── Monopoly-Uno additions ──────────────────────────────────────────────────
+// // ─── Monopoly-Uno additions ──────────────────────────────────────────
 // // "life" (money/expense) and "property" cards are never dealt into, or
-// // playable from, a hand. The instant one is drawn — during the initial
-// // deal, a normal draw, or a forced draw-2/draw-4 penalty — it's resolved
+// // playable from, a hand. The instant one is drawn --- during the initial
+// // deal, a normal draw, or a forced draw-2/draw-4 penalty --- it's resolved
 // // immediately: a life card pays out/charges the player on the spot, a
 // // property card becomes a pending Accept/Decline offer. See
 // // drawAndResolve/dealInitialHand below and the drawCard/botTurn mutations.
@@ -30,11 +29,11 @@
 // ] as const;
 
 // // Property cards hand the player an Accept/Decline offer (game.respondProperty)
-// // the moment they're drawn — they can act on it whenever they like, it
+// // the moment they're drawn --- they can act on it whenever they like, it
 // // doesn't block their turn.
 // //
-// // ─── Price pass ──────────────────────────────────────────────────────────────
-// // Prices scaled way down from the original 3000–25000 range (which meant a
+// // ─── Price pass ──────────────────────────────────────────────────────
+// // Prices scaled way down from the original 3000-25000 range (which meant a
 // // player could barely afford even the cheapest property on their entire
 // // starting $3000). These let someone snag an apartment within their first
 // // couple of draws while keeping the same ~40% value-over-price margin.
@@ -46,12 +45,175 @@
 //   { id: "property_mansion", label: "Mansion", price: 5000, value: 6800 },
 // ] as const;
 
+// // ─── Gamble stack additions ──────────────────────────────────────────
+// // A side stack, separate from the main Uno deck entirely. It's purely
+// // optional and purely elective: on your turn you can tap it to pull one
+// // card, purely a "life happens" flavor event (a friend gives you cash, the
+// // plumber bill shows up, etc.), and it never counts as your turn action ---
+// // you still have to play a card or draw from the main pile to actually pass
+// // play. See drawGambleCard/acknowledgeGambleEvent below.
+// //
+// // Balance pass: of the 18 cards in the catalog,
+// //   - 4 are dramatic LOSSES  (wipeOut: true --- your cash goes to $0)
+// //   - 4 are dramatic WINS    (jackpot: true --- a big flat bonus)
+// //   - 10 are modest, in-between swings (small gains and small bills)
+// // so a pull is mostly a minor nudge with an occasional huge high or low.
+// export const GAMBLE_EVENTS = [
+//   // ── Dramatic losses (wipe cash to $0) ──────────────────────────────
+//   {
+//     id: "gamble_casino",
+//     label: "Casino Meltdown",
+//     description: "A wild night at the casino wiped out your entire wallet.",
+//     wipeOut: true,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_badinvestment",
+//     label: "Bad Investment",
+//     description: "The startup you bet on collapsed overnight. Savings: gone.",
+//     wipeOut: true,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_identitytheft",
+//     label: "Identity Theft",
+//     description: "Someone cleaned out your account before the bank caught it.",
+//     wipeOut: true,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_housefire",
+//     label: "House Fire",
+//     description: "Insurance didn't cover it. Every last cent went to repairs.",
+//     wipeOut: true,
+//     jackpot: false,
+//   },
+//   // ── Dramatic wins (big flat bonus) ─────────────────────────────────
+//   {
+//     id: "gamble_jackpot",
+//     label: "Lottery Jackpot",
+//     description: "Your numbers hit. All of them.",
+//     amount: 5000,
+//     wipeOut: false,
+//     jackpot: true,
+//   },
+//   {
+//     id: "gamble_inheritance",
+//     label: "Surprise Inheritance",
+//     description: "A distant relative you barely remember left you a fortune.",
+//     amount: 4000,
+//     wipeOut: false,
+//     jackpot: true,
+//   },
+//   {
+//     id: "gamble_startupsold",
+//     label: "Startup Sold",
+//     description: "The company you had shares in just got acquired.",
+//     amount: 6000,
+//     wipeOut: false,
+//     jackpot: true,
+//   },
+//   {
+//     id: "gamble_lawsuit",
+//     label: "Won a Lawsuit",
+//     description: "The court ruled in your favor. Settlement check incoming.",
+//     amount: 3500,
+//     wipeOut: false,
+//     jackpot: true,
+//   },
+//   // ── Modest, in-between swings ───────────────────────────────────────
+//   {
+//     id: "gamble_friendgift",
+//     label: "Generous Friend",
+//     description: "A friend gave you $200, no strings attached.",
+//     amount: 200,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_plumber",
+//     label: "Plumber Bill",
+//     description: "The tap finally broke. The plumber wasn't cheap.",
+//     amount: -150,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_soldfurniture",
+//     label: "Sold Old Furniture",
+//     description: "That couch in storage just became someone else's problem.",
+//     amount: 100,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_parkingticket",
+//     label: "Parking Ticket",
+//     description: "You really should have read that sign.",
+//     amount: -75,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_foundcash",
+//     label: "Found Cash",
+//     description: "An old coat pocket had a nice surprise in it.",
+//     amount: 50,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_cartires",
+//     label: "New Tires",
+//     description: "The car needed new tires. All four of them.",
+//     amount: -300,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_sidegig",
+//     label: "Side Gig Payout",
+//     description: "That weekend gig finally paid out.",
+//     amount: 250,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_crackedscreen",
+//     label: "Cracked Screen",
+//     description: "The phone slipped. The repair bill didn't.",
+//     amount: -120,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_cashback",
+//     label: "Cashback Rewards",
+//     description: "Your card's rewards program finally paid off.",
+//     amount: 80,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+//   {
+//     id: "gamble_vetbill",
+//     label: "Vet Bill",
+//     description: "The dog is fine. Your wallet is not.",
+//     amount: -200,
+//     wipeOut: false,
+//     jackpot: false,
+//   },
+// ] as const;
+
 // function lifeEvent(cardId: string) {
 //   return LIFE_EVENTS.find((e) => e.id === cardId);
 // }
 
 // function propertyDef(cardId: string) {
 //   return PROPERTIES.find((p) => p.id === cardId);
+// }
+
+// function gambleDef(cardId: string) {
+//   return GAMBLE_EVENTS.find((g) => g.id === cardId);
 // }
 
 // function wealthOf(p: { money?: number; properties?: { value: number }[] }) {
@@ -71,23 +233,28 @@
 //   for (const wild of WILDS) {
 //     for (let i = 0; i < 4; i++) deck.push(wild);
 //   }
-//   // Two of each life event, one of each property — enough to matter without
+//   // Two of each life event, one of each property --- enough to matter without
 //   // drowning out the normal Uno mechanics.
 //   for (const event of LIFE_EVENTS) {
 //     deck.push(event.id, event.id);
 //   }
 //   // Multiple copies per property, weighted so cheaper ones turn up more
-//   // often — a starter apartment should show up early and regularly, while
-//   // the mansion stays a rarer late-game jackpot. (Previously just 1 copy
-//   // of each — only 5 property cards in the entire deck — which combined
-//   // with the dealInitialHand bug above made them feel like they barely
-//   // existed.)
+//   // often --- a starter apartment should show up early and regularly, while
+//   // the mansion stays a rarer late-game jackpot.
 //   const PROPERTY_COPIES = [4, 3, 3, 2, 2]; // apartment, house, condo, hotel, mansion
 //   PROPERTIES.forEach((prop, i) => {
 //     const copies = PROPERTY_COPIES[i] ?? 2;
 //     for (let c = 0; c < copies; c++) deck.push(prop.id);
 //   });
 //   return shuffle(deck);
+// }
+
+// // The Gamble stack is a completely separate deck from the main Uno deck ---
+// // it never gets shuffled in with numbers/actions/wilds, and drawing from it
+// // is never forced. This just builds/reshuffles the catalog into a random
+// // order.
+// export function createGambleDeck(): string[] {
+//   return shuffle(GAMBLE_EVENTS.map((g) => g.id));
 // }
 
 // function shuffle<T>(array: T[]): T[] {
@@ -99,7 +266,7 @@
 //   return arr;
 // }
 
-// // ─── Draw-time resolution of life/property cards ───────────────────────────
+// // ─── Draw-time resolution of life/property cards ───────────────────────
 // // "life" and "property" cards are never allowed to sit in a hand. The instant
 // // one is drawn (whether from a normal draw, a forced draw-2/draw-4 penalty,
 // // or the initial deal) it is pulled out of the deck permanently: a life card
@@ -133,12 +300,11 @@
 //     }
 //     const cardId = deck.shift();
 //     if (!cardId) break;
-
 //     const life = lifeEvent(cardId);
 //     const prop = propertyDef(cardId);
 //     if (life) {
 //       lifeEvents.push({ id: life.id, label: life.label, amount: life.amount });
-//       // Removed from the game entirely — must NOT go into discardPile, or it
+//       // Removed from the game entirely --- must NOT go into discardPile, or it
 //       // could become the visible "top card" and hijack game.currentColor
 //       // even though it was never actually played.
 //     } else if (prop) {
@@ -148,7 +314,7 @@
 //         price: prop.price,
 //         value: prop.value,
 //       });
-//       // Same reasoning as above — never touches discardPile.
+//       // Same reasoning as above --- never touches discardPile.
 //     } else {
 //       keep.push(cardId);
 //     }
@@ -159,7 +325,7 @@
 
 // // Deals a hand of exactly `count` *playable* cards to a fresh player at game
 // // start. Unlike a mid-game draw, life/property cards hit during the deal are
-// // NOT resolved — no money is paid/charged and no offer is queued. They're
+// // NOT resolved --- no money is paid/charged and no offer is queued. They're
 // // just skipped over and replaced with the next card, so every player starts
 // // with an identical $3000 regardless of how the shuffle fell. Applying a
 // // random bonus/bill before anyone has taken a single turn would be an unfair
@@ -173,14 +339,10 @@
 // } {
 //   const deck = [...deckIn];
 //   const hand: string[] = [];
-//   // Life/property cards hit during the deal are set aside, NOT destroyed —
+//   // Life/property cards hit during the deal are set aside, NOT destroyed ---
 //   // they get pushed back onto the deck once the hand is filled so they're
-//   // still in play for later draws. (Previously these were `shift()`'d off
-//   // and dropped entirely, which — multiplied across every player's initial
-//   // 7-card deal — was quietly deleting a big chunk of the already-small
-//   // property/life pool before the game even started.)
+//   // still in play for later draws.
 //   const setAside: string[] = [];
-
 //   while (hand.length < count && deck.length > 0) {
 //     const cardId = deck.shift()!;
 //     if (lifeEvent(cardId) || propertyDef(cardId)) {
@@ -189,12 +351,11 @@
 //     }
 //     hand.push(cardId);
 //   }
-
 //   return { deck: [...deck, ...setAside], hand };
 // }
 
-// // ─── Salary: every 8th turn *per player* (a 7-day week, then payday — "next
-// // Monday") — everyone still in the game gets paid $200 ────────────────────
+// // ─── Salary: every 8th turn *per player* (a 7-day week, then payday --- "next
+// // Monday") --- everyone still in the game gets paid $200 ────────────────────
 // const SALARY_INTERVAL = 8;
 // const SALARY_AMOUNT = 200;
 
@@ -209,7 +370,7 @@
 //     .collect();
 
 //   // turnCount increments once per action across ALL players, not once per
-//   // full lap around the table — scale the interval by player count so "8
+//   // full lap around the table --- scale the interval by player count so "8
 //   // turns" means 8 turns for each individual player, regardless of table
 //   // size (otherwise a 2-player game pays out every 4 of your own turns).
 //   const numPlayers = allPlayers.length || 1;
@@ -277,7 +438,7 @@
 //   return false;
 // }
 
-// // Whether a card is allowed to be played on top of an active draw stack —
+// // Whether a card is allowed to be played on top of an active draw stack ---
 // // either a +2 or a +4 (wild_draw4) can stack on top of EITHER a +2 or a +4,
 // // so players can escalate/pass the penalty back and forth freely.
 // function isStackableDrawCard(cardId: string): boolean {
@@ -285,8 +446,7 @@
 //   return value === "draw2" || cardId === "wild_draw4";
 // }
 
-// // ─── Queries ─────────────────────────────────────────────────────────────────
-
+// // ─── Queries ─────────────────────────────────────────────────────────
 // export const getGame = query({
 //   args: { roomId: v.id("rooms") },
 //   handler: async (ctx, { roomId }) => {
@@ -310,8 +470,7 @@
 //   },
 // });
 
-// // ─── Start Game ───────────────────────────────────────────────────────────────
-
+// // ─── Start Game ────────────────────────────────────────────────────────
 // export const startGame = mutation({
 //   args: { roomId: v.id("rooms"), requesterId: v.string() },
 //   handler: async (ctx, { roomId, requesterId }) => {
@@ -331,7 +490,7 @@
 //     let deck = createDeck();
 //     const hands: Record<string, string[]> = {};
 
-//     // Deal 7 real cards to each player — life/property cards hit along the
+//     // Deal 7 real cards to each player --- life/property cards hit along the
 //     // way are skipped (not resolved), so every player starts with an
 //     // identical $3000 and no pending offers.
 //     for (const player of sortedPlayers) {
@@ -350,25 +509,26 @@
 //       deck = shuffle(deck);
 //       firstCard = deck.shift()!;
 //     }
-
 //     const { color: firstColor } = parseCard(firstCard);
 
 //     for (const player of sortedPlayers) {
 //       await ctx.db.patch(player._id, {
 //         hand: hands[player.userId],
-//         // Fresh, EQUAL financial slate every game — nobody starts richer or
+//         // Fresh, EQUAL financial slate every game --- nobody starts richer or
 //         // poorer than anyone else.
 //         money: 3000,
 //         properties: [],
 //         pendingProperties: [],
 //         pendingLifeEvents: [],
+//         pendingGambleEvent: undefined,
+//         lastGambleTurn: undefined,
 //       });
 //     }
 
 //     await ctx.db.insert("games", {
 //       roomId,
 //       deck,
-//       // Only ever holds cards that were actually played — never a resolved
+//       // Only ever holds cards that were actually played --- never a resolved
 //       // life/property card, since its last entry is the visible "top card".
 //       discardPile: [firstCard],
 //       currentColor: firstColor,
@@ -380,6 +540,7 @@
 //       lastAction: `Game started! ${firstCard} is the first card`,
 //       status: "active",
 //       createdAt: Date.now(),
+//       gambleDeck: createGambleDeck(),
 //     });
 
 //     await ctx.db.patch(roomId, { status: "playing" });
@@ -391,12 +552,11 @@
 //   },
 // });
 
-// // ─── Play Card ────────────────────────────────────────────────────────────────
-// // NOTE: life-event and property cards can never appear in a hand anymore —
+// // ─── Play Card ───────────────────────────────────────────────────────────
+// // NOTE: life-event and property cards can never appear in a hand anymore ---
 // // they're resolved the instant they're drawn (see drawAndResolve / drawCard /
-// // botTurn below) — so this mutation only ever has to deal with ordinary Uno
+// // botTurn below) --- so this mutation only ever has to deal with ordinary Uno
 // // cards (numbers, actions, wilds).
-
 // export const playCard = mutation({
 //   args: {
 //     roomId: v.id("rooms"),
@@ -409,7 +569,6 @@
 //       .query("games")
 //       .withIndex("by_room", (q) => q.eq("roomId", roomId))
 //       .first();
-
 //     if (!game || game.status !== "active") throw new Error("No active game");
 
 //     const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
@@ -421,32 +580,29 @@
 //         q.eq("userId", userId).eq("roomId", roomId),
 //       )
 //       .first();
-
 //     if (!player) throw new Error("Player not found");
 
 //     const topCard = game.discardPile[game.discardPile.length - 1];
-
 //     if (!canPlayCard(cardId, topCard, game.currentColor)) {
 //       throw new Error("Cannot play that card");
 //     }
 
-//     // ── Penalty stack enforcement ─────────────────────────────────────────────
-//     // Either a +2 or a +4 can be stacked on top of either a +2 or a +4 —
+//     // ── Penalty stack enforcement ─────────────────────────────────────────
+//     // Either a +2 or a +4 can be stacked on top of either a +2 or a +4 ---
 //     // players can freely escalate or pass the penalty back and forth.
 //     if (game.drawStack > 0 && !isStackableDrawCard(cardId)) {
 //       throw new Error("You must play a +2 or +4 to stack, or draw!");
 //     }
-//     // ─────────────────────────────────────────────────────────────────────────
+//     // ─────────────────────────────────────────────────────────────────────
 
 //     const cardIdx = player.hand.indexOf(cardId);
 //     if (cardIdx === -1) throw new Error("Card not in hand");
-
 //     const handCopy = [...player.hand];
 //     handCopy.splice(cardIdx, 1);
 
 //     const parsedCard = parseCard(cardId);
 
-//     // ── Standard turn-advance mechanics (skip/reverse/draw2/wild/etc.) ────────
+//     // ── Standard turn-advance mechanics (skip/reverse/draw2/wild/etc.) ────
 //     const newColor =
 //       parsedCard.color === "wild" ? (chosenColor ?? "red") : parsedCard.color;
 //     let newDirection = game.direction;
@@ -461,18 +617,18 @@
 //         numPlayers === 2
 //           ? (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers
 //           : (nextIndex + newDirection + numPlayers) % numPlayers;
-//       lastAction += " — Direction reversed!";
+//       lastAction += " --- Direction reversed!";
 //     } else if (parsedCard.value === "skip") {
 //       nextIndex = (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers;
-//       lastAction += " — Next player skipped!";
+//       lastAction += " --- Next player skipped!";
 //     } else if (parsedCard.value === "draw2") {
 //       newDrawStack += 2;
 //       nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
-//       lastAction += ` — Next player must draw ${newDrawStack}!`;
+//       lastAction += ` --- Next player must draw ${newDrawStack}!`;
 //     } else if (cardId === "wild_draw4") {
 //       newDrawStack += 4;
 //       nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
-//       lastAction += ` — Next player must draw ${newDrawStack} and color is ${newColor}!`;
+//       lastAction += ` --- Next player must draw ${newDrawStack} and color is ${newColor}!`;
 //     } else {
 //       nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
 //     }
@@ -481,11 +637,11 @@
 //       newDrawStack = 0;
 //     }
 
-//     if (cardId === "wild") lastAction += ` — Color changed to ${newColor}!`;
+//     if (cardId === "wild") lastAction += ` --- Color changed to ${newColor}!`;
 
 //     const newTurnCount = (game.turnCount ?? 0) + 1;
 
-//     // ── Check for "going out" — but only a win if you're the wealthiest ───────
+//     // ── Check for "going out" --- but only a win if you're the wealthiest ───
 //     if (handCopy.length === 0) {
 //       const allPlayers = await ctx.db
 //         .query("players")
@@ -508,7 +664,7 @@
 //           discardPile: [...game.discardPile, cardId],
 //           winnerId: userId,
 //           status: "finished",
-//           lastAction: `🎉 ${player.name} went out with $${myWealth.toLocaleString()} in total wealth — the richest player — and WINS!`,
+//           lastAction: `🎉 ${player.name} went out with $${myWealth.toLocaleString()} in total wealth --- the richest player --- and WINS!`,
 //         });
 //         await ctx.db.patch(roomId, { status: "finished" });
 //         return {
@@ -518,7 +674,7 @@
 //         };
 //       }
 
-//       // Not the wealthiest — blocked from winning. Draw 2 penalty cards
+//       // Not the wealthiest --- blocked from winning. Draw 2 penalty cards
 //       // (resolved through the same life/property pipeline as any draw) and
 //       // stay in the game.
 //       const resolved = drawAndResolve(2, game.deck, [
@@ -554,13 +710,14 @@
 //         drawStack: newDrawStack,
 //         turnCount: newTurnCount,
 //         ...(salaryNotice ? { salaryNotice } : {}),
-//         lastAction: `${player.name} went out but only has $${myWealth.toLocaleString()} — not the richest player! Forced to draw 2 and stay in the game.`,
+//         lastAction: `${player.name} went out but only has $${myWealth.toLocaleString()} --- not the richest player! Forced to draw 2 and stay in the game.`,
 //       });
 
 //       const nextPlayerId = game.playerOrder[nextIndex];
 //       if (nextPlayerId.startsWith("bot_")) {
 //         await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
 //       }
+
 //       return {
 //         outcome: "blocked" as const,
 //         myWealth,
@@ -592,11 +749,10 @@
 //   },
 // });
 
-// // ─── Respond to a Property Offer ───────────────────────────────────────────────
-// // Always resolves the OLDEST queued offer (pendingProperties[0]) — if a
+// // ─── Respond to a Property Offer ──────────────────────────────────────────
+// // Always resolves the OLDEST queued offer (pendingProperties[0]) --- if a
 // // forced multi-card draw queued up more than one, the player works through
 // // them one at a time, in the order they were drawn.
-
 // export const respondProperty = mutation({
 //   args: { roomId: v.id("rooms"), userId: v.string(), accept: v.boolean() },
 //   handler: async (ctx, { roomId, userId, accept }) => {
@@ -606,8 +762,8 @@
 //         q.eq("userId", userId).eq("roomId", roomId),
 //       )
 //       .first();
-
 //     if (!player) throw new Error("Player not found");
+
 //     const queue = player.pendingProperties ?? [];
 //     const offer = queue[0];
 //     if (!offer) throw new Error("No pending property offer");
@@ -659,11 +815,10 @@
 //   },
 // });
 
-// // ─── Acknowledge Life Events ────────────────────────────────────────────────────
-// // The money from a "life" card is applied the instant it's drawn — this
+// // ─── Acknowledge Life Events ───────────────────────────────────────────────
+// // The money from a "life" card is applied the instant it's drawn --- this
 // // mutation just clears the queue once the player has seen the "you got/owed
 // // $X" modal, so it doesn't pop up again.
-
 // export const acknowledgeLifeEvents = mutation({
 //   args: { roomId: v.id("rooms"), userId: v.string() },
 //   handler: async (ctx, { roomId, userId }) => {
@@ -678,16 +833,18 @@
 //   },
 // });
 
-// // ─── Draw Card ────────────────────────────────────────────────────────────────
-
-// export const drawCard = mutation({
+// // ─── Gamble Stack: pull a card ──────────────────────────────────────────
+// // Purely elective, purely on your own turn, and never ends your turn ---
+// // you still have to play a card or draw from the main pile afterward to
+// // actually pass play. Limited to one pull per own turn via lastGambleTurn,
+// // so it can't be spammed for free money before you act.
+// export const drawGambleCard = mutation({
 //   args: { roomId: v.id("rooms"), userId: v.string() },
 //   handler: async (ctx, { roomId, userId }) => {
 //     const game = await ctx.db
 //       .query("games")
 //       .withIndex("by_room", (q) => q.eq("roomId", roomId))
 //       .first();
-
 //     if (!game || game.status !== "active") throw new Error("No active game");
 
 //     const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
@@ -699,7 +856,81 @@
 //         q.eq("userId", userId).eq("roomId", roomId),
 //       )
 //       .first();
+//     if (!player) throw new Error("Player not found");
 
+//     const turnCount = game.turnCount ?? 0;
+//     if ((player.lastGambleTurn ?? -1) === turnCount) {
+//       throw new Error("You've already tried your luck this turn!");
+//     }
+
+//     let gambleDeck = [...(game.gambleDeck ?? [])];
+//     if (gambleDeck.length === 0) {
+//       gambleDeck = createGambleDeck();
+//     }
+//     const cardId = gambleDeck.shift()!;
+//     const def = gambleDef(cardId);
+//     if (!def) throw new Error("Unknown gamble card");
+
+//     const moneyBefore = player.money ?? 0;
+//     const appliedAmount = def.wipeOut ? -moneyBefore : (def.amount ?? 0);
+//     const newMoney = def.wipeOut ? 0 : moneyBefore + appliedAmount;
+
+//     await ctx.db.patch(player._id, {
+//       money: newMoney,
+//       lastGambleTurn: turnCount,
+//       pendingGambleEvent: {
+//         id: def.id,
+//         label: def.label,
+//         description: def.description,
+//         amount: appliedAmount,
+//         wipeOut: def.wipeOut,
+//         jackpot: def.jackpot,
+//       },
+//     });
+
+//     await ctx.db.patch(game._id, {
+//       gambleDeck,
+//       lastAction: `🎲 ${player.name} tried their luck: ${def.label}!`,
+//     });
+//   },
+// });
+
+// // ─── Acknowledge Gamble Event ───────────────────────────────────────────
+// // Money was already applied the instant the card was pulled --- this just
+// // clears the pending event so the "you won/lost $X" modal goes away.
+// export const acknowledgeGambleEvent = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     await ctx.db.patch(player._id, { pendingGambleEvent: undefined });
+//   },
+// });
+
+// // ─── Draw Card ───────────────────────────────────────────────────────────
+// export const drawCard = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (!game || game.status !== "active") throw new Error("No active game");
+
+//     const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
+//     if (currentPlayerId !== userId) throw new Error("Not your turn");
+
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
 //     if (!player) throw new Error("Player not found");
 
 //     const drawCount = game.drawStack > 0 ? game.drawStack : 1;
@@ -745,14 +976,15 @@
 //   },
 // });
 
-// // ─── Bot Turn (Internal) ──────────────────────────────────────────────────────
+// // ─── Bot Turn (Internal) ──────────────────────────────────────────────────
 // // Bots never end up holding a life/property card either (draw-time
 // // resolution applies to them too), so their "playable" filter and play
 // // logic below only ever has to deal with ordinary Uno cards. When a bot
 // // draws into a property offer it decides immediately with a simple
-// // affordability heuristic instead of leaving a modal open — there's no UI
-// // for a bot to see.
-
+// // affordability heuristic instead of leaving a modal open --- there's no UI
+// // for a bot to see. Bots also never touch the Gamble stack --- it's a
+// // player-elective feature with no UI for a bot to reason about, so bots
+// // just skip it entirely and play normally.
 // export const botTurn = internalMutation({
 //   args: { roomId: v.id("rooms") },
 //   handler: async (ctx, { roomId }) => {
@@ -760,7 +992,6 @@
 //       .query("games")
 //       .withIndex("by_room", (q) => q.eq("roomId", roomId))
 //       .first();
-
 //     if (!game || game.status !== "active") return;
 
 //     const botId = game.playerOrder[game.currentPlayerIndex];
@@ -772,21 +1003,17 @@
 //         q.eq("userId", botId).eq("roomId", roomId),
 //       )
 //       .first();
-
 //     if (!bot) return;
 
 //     const topCard = game.discardPile[game.discardPile.length - 1];
 //     const drawStack = game.drawStack;
-
 //     const isPenaltyStackTurn = drawStack > 0;
 
 //     const playable = bot.hand.filter((card) => {
 //       if (!canPlayCard(card, topCard, game.currentColor)) return false;
-
 //       if (!isPenaltyStackTurn) return true;
-
 //       // Either a +2 or a +4 can stack on top of an active penalty of
-//       // either kind — matches the human-player rule above.
+//       // either kind --- matches the human-player rule above.
 //       return isStackableDrawCard(card);
 //     });
 
@@ -809,7 +1036,6 @@
 
 //       const handCopy = [...bot.hand];
 //       handCopy.splice(handCopy.indexOf(card), 1);
-
 //       const parsedCard = parseCard(card);
 //       let botLastAction = `🤖 ${bot.name} played ${card}`;
 
@@ -826,19 +1052,19 @@
 //           numPlayers === 2
 //             ? (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers
 //             : (nextIndex + newDirection + numPlayers) % numPlayers;
-//         botLastAction += " — Direction reversed!";
+//         botLastAction += " --- Direction reversed!";
 //       } else if (parsedCard.value === "skip") {
 //         nextIndex =
 //           (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers;
-//         botLastAction += " — Next player skipped!";
+//         botLastAction += " --- Next player skipped!";
 //       } else if (parsedCard.value === "draw2") {
 //         newDrawStack += 2;
 //         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
-//         botLastAction += ` — Next player must draw ${newDrawStack}!`;
+//         botLastAction += ` --- Next player must draw ${newDrawStack}!`;
 //       } else if (card === "wild_draw4") {
 //         newDrawStack += 4;
 //         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
-//         botLastAction += ` — Next player must draw ${newDrawStack} and color is ${newColor}!`;
+//         botLastAction += ` --- Next player must draw ${newDrawStack} and color is ${newColor}!`;
 //       } else {
 //         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
 //       }
@@ -847,9 +1073,10 @@
 //         newDrawStack = 0;
 //       }
 
-//       if (card === "wild") botLastAction += ` — Color changed to ${newColor}!`;
+//       if (card === "wild")
+//         botLastAction += ` --- Color changed to ${newColor}!`;
 
-//       // ── Check for "going out" — wealth-gated, same as human players ────────
+//       // ── Check for "going out" --- wealth-gated, same as human players ────
 //       if (handCopy.length === 0) {
 //         const allPlayers = await ctx.db
 //           .query("players")
@@ -870,13 +1097,13 @@
 //             discardPile: [...game.discardPile, card],
 //             winnerId: botId,
 //             status: "finished",
-//             lastAction: `🤖🎉 ${bot.name} went out with $${myWealth.toLocaleString()} in total wealth — the richest player — and wins!`,
+//             lastAction: `🤖🎉 ${bot.name} went out with $${myWealth.toLocaleString()} in total wealth --- the richest player --- and wins!`,
 //           });
 //           await ctx.db.patch(roomId, { status: "finished" });
 //           return;
 //         }
 
-//         // Blocked — draw 2 (through the same life/property pipeline) and stay in.
+//         // Blocked --- draw 2 (through the same life/property pipeline) and stay in.
 //         const resolved = drawAndResolve(2, game.deck, [
 //           ...game.discardPile,
 //           card,
@@ -905,7 +1132,7 @@
 //           drawStack: newDrawStack,
 //           turnCount: newTurnCount,
 //           ...(salaryNotice ? { salaryNotice } : {}),
-//           lastAction: `🤖 ${bot.name} went out but only has $${myWealth.toLocaleString()} — not the richest! Forced to draw 2 and stay in the game.`,
+//           lastAction: `🤖 ${bot.name} went out but only has $${myWealth.toLocaleString()} --- not the richest! Forced to draw 2 and stay in the game.`,
 //         });
 
 //         const nextPlayerId = game.playerOrder[nextIndex];
@@ -918,7 +1145,6 @@
 //       }
 
 //       await ctx.db.patch(bot._id, { hand: handCopy });
-
 //       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
 
 //       await ctx.db.patch(game._id, {
@@ -975,8 +1201,7 @@
 //   },
 // });
 
-// // ─── Game History ─────────────────────────────────────────────────────────────
-
+// // ─── Game History ─────────────────────────────────────────────────────────
 // export const getFinishedGames = query({
 //   handler: async (ctx) => {
 //     return await ctx.db
@@ -995,11 +1220,9 @@
 //       .filter((q) => q.eq(q.field("status"), "finished"))
 //       .order("desc")
 //       .take(200);
-
 //     return allFinished.filter((game) => game.playerOrder.includes(userId));
 //   },
 // });
-
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
@@ -1361,11 +1584,34 @@ function dealInitialHand(
 const SALARY_INTERVAL = 8;
 const SALARY_AMOUNT = 200;
 
+// ─── Rent additions ──────────────────────────────────────────────────────
+// A player who owns MORE THAN ONE property earns passive rent every payday
+// on top of their flat salary --- 17% of the combined purchase price (not
+// resale value) of everything they own. A single property is just a home,
+// not a rental portfolio, so it earns nothing; two or more is what flips a
+// player into "landlord" mode.
+const RENT_PERCENTAGE = 0.17;
+const RENT_MIN_PROPERTIES = 2;
+
+function calculateRent(properties: { price: number }[] | undefined): number {
+  if (!properties || properties.length < RENT_MIN_PROPERTIES) return 0;
+  const combinedPrice = properties.reduce((s, pr) => s + pr.price, 0);
+  return Math.round(combinedPrice * RENT_PERCENTAGE);
+}
+
 async function paySalaryIfDue(
   ctx: MutationCtx,
   roomId: Id<"rooms">,
   newTurnCount: number,
-): Promise<{ turnCount: number; amount: number; at: number } | undefined> {
+): Promise<
+  | {
+      turnCount: number;
+      amount: number;
+      rentByPlayer: { userId: string; amount: number }[];
+      at: number;
+    }
+  | undefined
+> {
   const allPlayers = await ctx.db
     .query("players")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
@@ -1382,11 +1628,24 @@ async function paySalaryIfDue(
     return undefined;
   }
 
+  const rentByPlayer: { userId: string; amount: number }[] = [];
+
   for (const p of allPlayers) {
-    await ctx.db.patch(p._id, { money: (p.money ?? 0) + SALARY_AMOUNT });
+    const rent = calculateRent(p.properties);
+    await ctx.db.patch(p._id, {
+      money: (p.money ?? 0) + SALARY_AMOUNT + rent,
+    });
+    if (rent > 0) {
+      rentByPlayer.push({ userId: p.userId, amount: rent });
+    }
   }
 
-  return { turnCount: newTurnCount, amount: SALARY_AMOUNT, at: Date.now() };
+  return {
+    turnCount: newTurnCount,
+    amount: SALARY_AMOUNT,
+    rentByPlayer,
+    at: Date.now(),
+  };
 }
 
 // Bots have no UI to show an Accept/Decline modal, so any property offers
@@ -1452,10 +1711,26 @@ function isStackableDrawCard(cardId: string): boolean {
 export const getGame = query({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => {
-    return await ctx.db
+    const game = await ctx.db
       .query("games")
       .withIndex("by_room", (q) => q.eq("roomId", roomId))
       .first();
+
+    if (!game || !game.salaryNotice) return game;
+
+    // Schema stores rentByPlayer as an array (Convex has no bare-object
+    // validator), but the client reads it as a userId -> amount lookup
+    // (game.salaryNotice.rentByPlayer?.[currentUserId]) --- reshape it here
+    // so the db format and the client format can each be what's natural.
+    const rentByPlayer: Record<string, number> = {};
+    for (const entry of game.salaryNotice.rentByPlayer ?? []) {
+      rentByPlayer[entry.userId] = entry.amount;
+    }
+
+    return {
+      ...game,
+      salaryNotice: { ...game.salaryNotice, rentByPlayer },
+    };
   },
 });
 
