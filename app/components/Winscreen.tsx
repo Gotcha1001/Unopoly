@@ -5,6 +5,9 @@
 // 2. NEW: Added `players` prop so the win screen can show a final financial
 //    standings table (cash, property value, total wealth) sorted richest
 //    first, matching the new "richest player wins" rule.
+// 3. NEW: Cash/property/wealth columns now count up from 0 via AnimatedCash
+//    instead of appearing as static numbers, staggered left to right so the
+//    columns fill in as a small wave rather than all at once.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { motion } from "framer-motion";
@@ -15,6 +18,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useState } from "react";
 import { toast } from "sonner";
+import { AnimatedCash } from "./Animatedcash";
 
 interface PlayerFinancials {
   userId: string;
@@ -139,13 +143,17 @@ export function WinScreen({
                   {p.name}
                 </span>
                 <span className="text-gray-600 dark:text-purple-300 tabular-nums">
-                  ${p.cash.toLocaleString()}
+                  <AnimatedCash value={p.cash} startFromZero delay={0} />
                 </span>
                 <span className="text-gray-600 dark:text-purple-300 tabular-nums">
-                  ${p.propertyValue.toLocaleString()}
+                  <AnimatedCash
+                    value={p.propertyValue}
+                    startFromZero
+                    delay={150}
+                  />
                 </span>
                 <span className="text-gray-900 dark:text-white tabular-nums">
-                  ${p.wealth.toLocaleString()}
+                  <AnimatedCash value={p.wealth} startFromZero delay={300} />
                 </span>
               </div>
             ))}

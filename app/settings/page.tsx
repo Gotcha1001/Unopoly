@@ -160,7 +160,7 @@ export default function SettingsPage() {
       </div>
 
       {/* How to add backgrounds hint */}
-      <div className="p-4 rounded-2xl border border-dashed border-gray-300 dark:border-purple-800/60 text-sm text-gray-400 dark:text-purple-500">
+      {/* <div className="p-4 rounded-2xl border border-dashed border-gray-300 dark:border-purple-800/60 text-sm text-gray-400 dark:text-purple-500">
         <p className="font-semibold mb-1 text-gray-500 dark:text-purple-400">
           Adding custom backgrounds
         </p>
@@ -183,7 +183,7 @@ export default function SettingsPage() {
           </code>
           .
         </p>
-      </div>
+      </div> */}
     </div>
   );
 }
