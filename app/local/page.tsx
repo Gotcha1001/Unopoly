@@ -642,7 +642,7 @@ function GameScreen({
     if (gameState.drawStack > 0) {
       const { value } = parseCard(cardId);
       const { value: topValue } = parseCard(topCard);
-      if (topValue === "draw2" && value !== "draw2") return;
+      if (topValue === "draw2" && value !== "draw2") return; // or playable = false
       if (topCard === "wild_draw4" && cardId !== "wild_draw4") return;
       if (value === "wild") return;
     }
