@@ -37,6 +37,58 @@ export const LIFE_EVENTS = [
 // player could barely afford even the cheapest property on their entire
 // starting $3000). These let someone snag an apartment within their first
 // couple of draws while keeping the same ~40% value-over-price margin.
+
+// ─── Property upgrades ──────────────────────────────────────────────
+// A 4-tier ladder purchased in order per property instance. Cost/value
+// gain scale off the property's original purchase price so cheap and
+// expensive properties both feel proportionate. Upgrading also raises
+// `invested`, which feeds rent — so it's not just a one-off wealth bump,
+// it's an ongoing income decision.
+export const PROPERTY_UPGRADES = [
+  {
+    id: "upgrade_paint",
+    label: "Fresh Paint Job",
+    emoji: "🎨",
+    description: "A cheap cosmetic refresh that makes buyers take notice.",
+    costMultiplier: 0.15,
+    valueMultiplier: 0.12,
+  },
+  {
+    id: "upgrade_kitchen",
+    label: "Renovated Kitchen",
+    emoji: "🍳",
+    description: "New countertops and appliances bump resale value.",
+    costMultiplier: 0.28,
+    valueMultiplier: 0.22,
+  },
+  {
+    id: "upgrade_pool",
+    label: "Swimming Pool",
+    emoji: "🏊",
+    description: "A backyard pool — pricey, but a serious value boost.",
+    costMultiplier: 0.45,
+    valueMultiplier: 0.35,
+  },
+  {
+    id: "upgrade_extension",
+    label: "Extra Floor",
+    emoji: "🏗️",
+    description: "A full extension — the biggest upgrade available.",
+    costMultiplier: 0.6,
+    valueMultiplier: 0.5,
+  },
+] as const;
+
+function nextUpgradeFor(prop: { price: number; upgrades?: string[] }) {
+  const owned = prop.upgrades ?? [];
+  if (owned.length >= PROPERTY_UPGRADES.length) return null;
+  return PROPERTY_UPGRADES[owned.length];
+}
+
+function makeInstanceId() {
+  return `prop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export const PROPERTIES = [
   { id: "property_apartment", label: "Apartment", price: 600, value: 850 },
   { id: "property_house", label: "Suburban House", price: 1200, value: 1700 },
@@ -368,10 +420,15 @@ const SALARY_AMOUNT = 200;
 const RENT_PERCENTAGE = 0.17;
 const RENT_MIN_PROPERTIES = 2;
 
-function calculateRent(properties: { price: number }[] | undefined): number {
+function calculateRent(
+  properties: { price: number; invested?: number }[] | undefined,
+): number {
   if (!properties || properties.length < RENT_MIN_PROPERTIES) return 0;
-  const combinedPrice = properties.reduce((s, pr) => s + pr.price, 0);
-  return Math.round(combinedPrice * RENT_PERCENTAGE);
+  const combinedInvested = properties.reduce(
+    (s, pr) => s + (pr.invested ?? pr.price),
+    0,
+  );
+  return Math.round(combinedInvested * RENT_PERCENTAGE);
 }
 
 async function paySalaryIfDue(
@@ -431,7 +488,15 @@ function resolveBotPropertyOffers(
   offers: { id: string; name: string; price: number; value: number }[],
 ): {
   money: number;
-  properties: { id: string; name: string; price: number; value: number }[];
+  properties: {
+    id: string;
+    name: string;
+    price: number;
+    value: number;
+    instanceId: string;
+    invested: number;
+    upgrades: string[];
+  }[];
 } {
   let money = startingMoney;
   const properties: {
@@ -439,11 +504,22 @@ function resolveBotPropertyOffers(
     name: string;
     price: number;
     value: number;
+    instanceId: string;
+    invested: number;
+    upgrades: string[];
   }[] = [];
   for (const offer of offers) {
     if (money - offer.price >= 150) {
       money -= offer.price;
-      properties.push(offer);
+      properties.push({
+        instanceId: makeInstanceId(),
+        id: offer.id,
+        name: offer.name,
+        price: offer.price,
+        value: offer.value,
+        invested: offer.price,
+        upgrades: [],
+      });
     }
   }
   return { money, properties };
@@ -840,10 +916,13 @@ export const respondProperty = mutation({
         properties: [
           ...(player.properties ?? []),
           {
+            instanceId: makeInstanceId(),
             id: offer.id,
             name: offer.name,
             price: offer.price,
             value: offer.value,
+            invested: offer.price,
+            upgrades: [],
           },
         ],
         pendingProperties: restQueue,
@@ -862,6 +941,64 @@ export const respondProperty = mutation({
         });
       }
     }
+  },
+});
+
+// ─── Upgrade a Property ──────────────────────────────────────────────
+// Not turn-gated — like respondProperty, this is a standing financial
+// decision the player can make any time it's available, not an action
+// that consumes their turn.
+export const upgradeProperty = mutation({
+  args: { roomId: v.id("rooms"), userId: v.string(), instanceId: v.string() },
+  handler: async (ctx, { roomId, userId, instanceId }) => {
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_user_room", (q) =>
+        q.eq("userId", userId).eq("roomId", roomId),
+      )
+      .first();
+    if (!player) throw new Error("Player not found");
+
+    const properties = player.properties ?? [];
+    const idx = properties.findIndex((p) => p.instanceId === instanceId);
+    if (idx === -1) throw new Error("You don't own that property");
+
+    const prop = properties[idx];
+    const upgrade = nextUpgradeFor(prop);
+    if (!upgrade) throw new Error("This property is already fully upgraded");
+
+    const cost = Math.round(prop.price * upgrade.costMultiplier);
+    const valueGain = Math.round(prop.price * upgrade.valueMultiplier);
+    if ((player.money ?? 0) < cost) {
+      throw new Error(
+        `You need $${cost.toLocaleString()} for ${upgrade.label}`,
+      );
+    }
+
+    const updatedProperties = [...properties];
+    updatedProperties[idx] = {
+      ...prop,
+      value: prop.value + valueGain,
+      invested: (prop.invested ?? prop.price) + cost,
+      upgrades: [...(prop.upgrades ?? []), upgrade.id],
+    };
+
+    await ctx.db.patch(player._id, {
+      money: (player.money ?? 0) - cost,
+      properties: updatedProperties,
+    });
+
+    const game = await ctx.db
+      .query("games")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .first();
+    if (game) {
+      await ctx.db.patch(game._id, {
+        lastAction: `${upgrade.emoji} ${player.name} added ${upgrade.label} to ${prop.name} (+$${valueGain.toLocaleString()} value)!`,
+      });
+    }
+
+    return { newValue: updatedProperties[idx].value, cost, valueGain };
   },
 });
 

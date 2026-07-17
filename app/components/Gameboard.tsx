@@ -1543,7 +1543,12 @@ import { api } from "@/convex/_generated/api";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { UnoCard, CardBack, parseCard } from "./UnoCard";
+import {
+  UnoCard,
+  CardBack,
+  parseCard,
+  PROPERTY_UPGRADES_META,
+} from "./UnoCard";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Volume2, VolumeX, Zap, Dices } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
@@ -1567,10 +1572,13 @@ interface Room {
 }
 
 interface PropertyHolding {
+  instanceId: string;
   id: string;
   name: string;
   price: number;
   value: number;
+  invested: number;
+  upgrades: string[];
 }
 
 interface LifeEventHolding {
@@ -1801,6 +1809,34 @@ export function GameBoard({
   const hasUsedGambleThisTurn =
     (myPlayer?.lastGambleTurn ?? -1) === (game.turnCount ?? 0);
   const canPullGamble = isMyTurn && !hasUsedGambleThisTurn && !pullingGamble;
+
+  const upgradeProperty = useMutation(api.game.upgradeProperty);
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(
+    null,
+  );
+  const [upgrading, setUpgrading] = useState(false);
+
+  // Derive live, not a stale snapshot — so the modal updates the instant
+  // the mutation resolves and Convex refetches myProperties.
+  const selectedProperty =
+    myProperties.find((p) => p.instanceId === selectedPropertyId) ?? null;
+
+  const handleUpgrade = async () => {
+    if (!selectedProperty) return;
+    setUpgrading(true);
+    try {
+      await upgradeProperty({
+        roomId: room._id,
+        userId: currentUserId,
+        instanceId: selectedProperty.instanceId,
+      });
+      play("buttonClick");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Couldn't upgrade");
+    } finally {
+      setUpgrading(false);
+    }
+  };
 
   const richestUserId = players.length
     ? players.reduce((best, p) => (wealthOf(p) > wealthOf(best) ? p : best))
@@ -2656,17 +2692,23 @@ export function GameBoard({
                 No properties yet
               </span>
             ) : (
-              myProperties.map((prop, i) => (
-                <div
-                  key={`${prop.id}-${i}`}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold"
-                  title={`Bought for $${prop.price.toLocaleString()}`}
+              myProperties.map((prop) => (
+                <button
+                  key={prop.instanceId}
+                  onClick={() => setSelectedPropertyId(prop.instanceId)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
+                  title={`Bought for $${prop.price.toLocaleString()} · click to view & upgrade`}
                 >
                   🏠 {prop.name}{" "}
                   <span className="text-emerald-300/70">
                     ${prop.value.toLocaleString()}
                   </span>
-                </div>
+                  {prop.upgrades.length > 0 && (
+                    <span className="text-emerald-300/50">
+                      +{prop.upgrades.length}
+                    </span>
+                  )}
+                </button>
               ))
             )}
             {myPropertyValue > 0 && (
@@ -2831,6 +2873,133 @@ export function GameBoard({
                   Decline
                 </motion.button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Property upgrade modal ─────────────────────────────────────── */}
+      <AnimatePresence>
+        {selectedProperty && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center px-4"
+            style={{
+              background: "rgba(0,0,0,0.75)",
+              backdropFilter: "blur(8px)",
+            }}
+            onClick={() => setSelectedPropertyId(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.7, y: 30, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.7, y: 30, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 360, damping: 26 }}
+              onClick={(e) => e.stopPropagation()}
+              className="p-7 rounded-3xl border border-white/20 text-center max-w-sm w-full"
+              style={{
+                background:
+                  "linear-gradient(145deg, rgba(6,60,55,0.97) 0%, rgba(4,35,32,0.97) 100%)",
+                boxShadow:
+                  "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(45,212,191,0.3)",
+              }}
+            >
+              <div className="text-5xl mb-2">🏠</div>
+              <h3 className="font-black text-2xl mb-1 text-white tracking-tight">
+                {selectedProperty.name}
+              </h3>
+              <p className="text-white/60 text-sm mb-1">
+                Bought for ${selectedProperty.price.toLocaleString()}
+              </p>
+              <p className="text-emerald-300 font-bold text-lg mb-4">
+                Worth ${selectedProperty.value.toLocaleString()}
+              </p>
+
+              {selectedProperty.upgrades.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 justify-center mb-4">
+                  {selectedProperty.upgrades.map((upId) => {
+                    const meta = PROPERTY_UPGRADES_META.find(
+                      (u) => u.id === upId,
+                    );
+                    return (
+                      <span
+                        key={upId}
+                        className="text-[10px] px-2 py-1 rounded-full bg-emerald-400/15 border border-emerald-400/30 text-emerald-200"
+                      >
+                        {meta?.emoji} {meta?.label}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+
+              {(() => {
+                const nextUpgrade =
+                  PROPERTY_UPGRADES_META[selectedProperty.upgrades.length];
+                if (!nextUpgrade) {
+                  return (
+                    <p className="text-white/40 text-xs mb-2">
+                      Fully upgraded — nothing left to add here.
+                    </p>
+                  );
+                }
+                const cost = Math.round(
+                  selectedProperty.price * nextUpgrade.costMultiplier,
+                );
+                const valueGain = Math.round(
+                  selectedProperty.price * nextUpgrade.valueMultiplier,
+                );
+                const canAfford = myMoney >= cost;
+                return (
+                  <div className="mb-2 p-4 rounded-2xl border border-white/10 bg-black/20 text-left">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xl">{nextUpgrade.emoji}</span>
+                      <span className="font-bold text-white text-sm">
+                        {nextUpgrade.label}
+                      </span>
+                    </div>
+                    <p className="text-white/50 text-xs mb-3">
+                      {nextUpgrade.description}
+                    </p>
+                    <div className="flex items-center justify-between text-xs mb-3">
+                      <span className="text-white/60">
+                        Cost:{" "}
+                        <span className="text-white font-semibold">
+                          ${cost.toLocaleString()}
+                        </span>
+                      </span>
+                      <span className="text-emerald-300">
+                        +${valueGain.toLocaleString()} value
+                      </span>
+                    </div>
+                    <motion.button
+                      whileHover={canAfford ? { scale: 1.03 } : undefined}
+                      whileTap={canAfford ? { scale: 0.97 } : undefined}
+                      disabled={!canAfford || upgrading}
+                      onClick={handleUpgrade}
+                      className="w-full py-2.5 rounded-xl font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{
+                        background: "linear-gradient(145deg, #2dd4bf, #0f766e)",
+                      }}
+                    >
+                      {upgrading
+                        ? "Upgrading…"
+                        : canAfford
+                          ? `Add ${nextUpgrade.label}`
+                          : `Need $${(cost - myMoney).toLocaleString()} more`}
+                    </motion.button>
+                  </div>
+                );
+              })()}
+
+              <button
+                onClick={() => setSelectedPropertyId(null)}
+                className="mt-2 text-white/50 text-xs hover:text-white/80 transition-colors"
+              >
+                Close
+              </button>
             </motion.div>
           </motion.div>
         )}
