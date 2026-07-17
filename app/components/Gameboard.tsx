@@ -1581,6 +1581,13 @@ interface PropertyHolding {
   upgrades: string[];
 }
 
+interface PropertyOffer {
+  id: string;
+  name: string;
+  price: number;
+  value: number;
+}
+
 interface LifeEventHolding {
   id: string;
   label: string;
@@ -1615,7 +1622,7 @@ interface Player {
   // Queues, not single objects --- a forced multi-card draw can surface more
   // than one offer/event at once. Drawn cards resolve into these the
   // instant they leave the deck; they never sit in `hand`.
-  pendingProperties?: PropertyHolding[] | undefined;
+  pendingProperties?: PropertyOffer[] | undefined; // ← was PropertyHolding[]
   pendingLifeEvents?: LifeEventHolding[] | undefined;
   // ─── Gamble stack additions ─────────────────────────────────────────
   pendingGambleEvent?: GambleEventHolding | undefined;
