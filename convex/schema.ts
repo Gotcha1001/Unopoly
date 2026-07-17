@@ -43,10 +43,13 @@ export default defineSchema({
     // Properties the player has actually bought (accepted the offer for).
     properties: v.array(
       v.object({
+        instanceId: v.string(), // NEW — unique per owned copy, needed to target upgrades
         id: v.string(),
         name: v.string(),
         price: v.number(),
         value: v.number(),
+        invested: v.number(), // NEW — price + $ spent on upgrades; drives rent
+        upgrades: v.array(v.string()), // NEW — upgrade ids purchased, in tier order
       }),
     ),
     // Set the instant a "property" card is DRAWN by this player --- it never

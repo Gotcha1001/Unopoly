@@ -15,6 +15,41 @@ interface UnoCardProps {
   index?: number;
 }
 
+export const PROPERTY_UPGRADES_META = [
+  {
+    id: "upgrade_paint",
+    label: "Fresh Paint Job",
+    emoji: "🎨",
+    description: "A cheap cosmetic refresh that makes buyers take notice.",
+    costMultiplier: 0.15,
+    valueMultiplier: 0.12,
+  },
+  {
+    id: "upgrade_kitchen",
+    label: "Renovated Kitchen",
+    emoji: "🍳",
+    description: "New countertops and appliances bump resale value.",
+    costMultiplier: 0.28,
+    valueMultiplier: 0.22,
+  },
+  {
+    id: "upgrade_pool",
+    label: "Swimming Pool",
+    emoji: "🏊",
+    description: "A backyard pool — pricey, but a serious value boost.",
+    costMultiplier: 0.45,
+    valueMultiplier: 0.35,
+  },
+  {
+    id: "upgrade_extension",
+    label: "Extra Floor",
+    emoji: "🏗️",
+    description: "A full extension — the biggest upgrade available.",
+    costMultiplier: 0.6,
+    valueMultiplier: 0.5,
+  },
+] as const;
+
 // ─── Monopoly-Uno additions ──────────────────────────────────────────────────
 // Metadata for the "life event" and "property" cards — used purely for
 // display here (amounts/labels). The source of truth for game logic lives in
