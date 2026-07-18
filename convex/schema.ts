@@ -31,7 +31,11 @@ export default defineSchema({
     name: v.string(),
     avatarUrl: v.optional(v.string()),
     isBot: v.boolean(),
+    difficulty: v.optional(
+      v.union(v.literal("aggressive"), v.literal("conservative")),
+    ),
     isReady: v.boolean(),
+
     isConnected: v.boolean(),
     hand: v.array(v.string()),
     seatIndex: v.number(),
@@ -139,6 +143,17 @@ export default defineSchema({
         rentByPlayer: v.array(
           v.object({ userId: v.string(), amount: v.number() }),
         ),
+        at: v.number(),
+      }),
+    ),
+    botGambleNotice: v.optional(
+      v.object({
+        botName: v.string(),
+        label: v.string(),
+        description: v.string(),
+        amount: v.number(),
+        wipeOut: v.boolean(),
+        jackpot: v.boolean(),
         at: v.number(),
       }),
     ),

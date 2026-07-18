@@ -79,6 +79,32 @@ export const PROPERTY_UPGRADES = [
   },
 ] as const;
 
+// ─── Bot difficulty tuning ─────────────────────────────────────────────
+// Every knob a bot's decision-making touches, gathered in one place so the
+// two personalities are easy to compare and retune. Conservative is the
+// old flat-$150-buffer behavior; aggressive is new.
+const BOT_DIFFICULTY = {
+  aggressive: {
+    // Cash buffer a bot insists on keeping after buying a property.
+    propertyBuffer: 50,
+    // Cash buffer a bot insists on keeping after paying for an upgrade.
+    upgradeBuffer: 100,
+    // Chance (0-1), checked once per own turn, of pulling the Gamble stack.
+    gambleChance: 0.6,
+  },
+  conservative: {
+    propertyBuffer: 150,
+    upgradeBuffer: 300,
+    gambleChance: 0.15,
+  },
+} as const;
+
+type BotDifficulty = keyof typeof BOT_DIFFICULTY;
+
+function difficultyOf(bot: { difficulty?: BotDifficulty }): BotDifficulty {
+  return bot.difficulty ?? "conservative";
+}
+
 function nextUpgradeFor(prop: { price: number; upgrades?: string[] }) {
   const owned = prop.upgrades ?? [];
   if (owned.length >= PROPERTY_UPGRADES.length) return null;
@@ -483,9 +509,15 @@ async function paySalaryIfDue(
 // Bots have no UI to show an Accept/Decline modal, so any property offers
 // they draw into are decided immediately with a simple heuristic: buy it if
 // they can afford it and still keep a $150 cash buffer, otherwise pass.
+// Bots have no UI to show an Accept/Decline modal, so any property offers
+// they draw into are decided immediately with a simple heuristic: buy it if
+// they can afford it and still keep their difficulty's cash buffer,
+// otherwise pass. Aggressive bots run a much thinner buffer, so they end up
+// owning more (and pricier) properties over a game.
 function resolveBotPropertyOffers(
   startingMoney: number,
   offers: { id: string; name: string; price: number; value: number }[],
+  difficulty: BotDifficulty = "conservative",
 ): {
   money: number;
   properties: {
@@ -498,6 +530,7 @@ function resolveBotPropertyOffers(
     upgrades: string[];
   }[];
 } {
+  const { propertyBuffer } = BOT_DIFFICULTY[difficulty];
   let money = startingMoney;
   const properties: {
     id: string;
@@ -509,7 +542,7 @@ function resolveBotPropertyOffers(
     upgrades: string[];
   }[] = [];
   for (const offer of offers) {
-    if (money - offer.price >= 150) {
+    if (money - offer.price >= propertyBuffer) {
       money -= offer.price;
       properties.push({
         instanceId: makeInstanceId(),
@@ -524,6 +557,10 @@ function resolveBotPropertyOffers(
   }
   return { money, properties };
 }
+
+type BotProperty = ReturnType<
+  typeof resolveBotPropertyOffers
+>["properties"][number];
 
 export function parseCard(cardId: string): { color: string; value: string } {
   if (cardId === "wild" || cardId === "wild_draw4")
@@ -1172,6 +1209,7 @@ export const drawCard = mutation({
 // for a bot to see. Bots also never touch the Gamble stack --- it's a
 // player-elective feature with no UI for a bot to reason about, so bots
 // just skip it entirely and play normally.
+
 export const botTurn = internalMutation({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => {
@@ -1180,10 +1218,8 @@ export const botTurn = internalMutation({
       .withIndex("by_room", (q) => q.eq("roomId", roomId))
       .first();
     if (!game || game.status !== "active") return;
-
     const botId = game.playerOrder[game.currentPlayerIndex];
     if (!botId.startsWith("bot_")) return;
-
     const bot = await ctx.db
       .query("players")
       .withIndex("by_user_room", (q) =>
@@ -1192,40 +1228,98 @@ export const botTurn = internalMutation({
       .first();
     if (!bot) return;
 
+    const difficulty = difficultyOf(bot);
+    const turnCount = game.turnCount ?? 0;
+
+    // NEW — Gamble stack pull, mirrors drawGambleCard's mechanics inline
+    // since a bot can't hit its own UI button. Chance-gated by difficulty;
+    // still respects the one-pull-per-turn rule via lastGambleTurn.
+    //
+    // botGambleNotice is a separate broadcast field (see schema.ts) rather
+    // than reusing pendingGambleEvent, because pendingGambleEvent lives on
+    // the *player* doc and only that player's own client reads it to show
+    // their "you won/lost $X" modal — a bot has no client to show it to
+    // itself, and there's no single human "owner" of the event to attach
+    // it to. botGambleNotice lives on the game doc instead, so every human
+    // at the table sees it, the same way everyone already sees salaryNotice.
+    let botMoney = bot.money ?? 0;
+    let gambleDeck = [...(game.gambleDeck ?? [])];
+    let gambleLastAction: string | null = null;
+    let gamblePulled = false;
+    let botGambleNotice: {
+      botName: string;
+      label: string;
+      description: string;
+      amount: number;
+      wipeOut: boolean;
+      jackpot: boolean;
+      at: number;
+    } | null = null;
+    if (
+      (bot.lastGambleTurn ?? -1) !== turnCount &&
+      Math.random() < BOT_DIFFICULTY[difficulty].gambleChance
+    ) {
+      if (gambleDeck.length === 0) gambleDeck = createGambleDeck();
+      const cardId = gambleDeck.shift()!;
+      const def = gambleDef(cardId);
+      if (def) {
+        const appliedAmount = def.wipeOut ? -botMoney : (def.amount ?? 0);
+        botMoney = def.wipeOut ? 0 : botMoney + appliedAmount;
+        gambleLastAction = `🎲 ${bot.name} tried their luck: ${def.label}!`;
+        gamblePulled = true;
+        botGambleNotice = {
+          botName: bot.name,
+          label: def.label,
+          description: def.description,
+          amount: appliedAmount,
+          wipeOut: def.wipeOut,
+          jackpot: def.jackpot,
+          at: Date.now(),
+        };
+      }
+    }
+
+    // NEW — Property upgrade, at most one per turn, before the bot decides
+    // what to play (so a payday-fresh bot can immediately reinvest).
+    const upgradeResult = resolveBotUpgrade(
+      botMoney,
+      bot.properties ?? [],
+      difficulty,
+    );
+    botMoney = upgradeResult.money;
+    const botProperties = upgradeResult.properties;
+    const upgradeLastAction = upgradeResult.label;
+
+    const combinedPrefix = [gambleLastAction, upgradeLastAction]
+      .filter(Boolean)
+      .join(" ");
+
     const topCard = game.discardPile[game.discardPile.length - 1];
     const drawStack = game.drawStack;
     const isPenaltyStackTurn = drawStack > 0;
-
     const playable = bot.hand.filter((card) => {
       if (!canPlayCard(card, topCard, game.currentColor)) return false;
       if (!isPenaltyStackTurn) return true;
-      // Either a +2 or a +4 can stack on top of an active penalty of
-      // either kind --- matches the human-player rule above.
       return isStackableDrawCard(card);
     });
-
     const newTurnCount = (game.turnCount ?? 0) + 1;
 
     if (playable.length > 0) {
-      // Prefer penalty cards, then skip/reverse, then anything else.
       const card =
         playable.find((c) => parseCard(c).value.includes("draw")) ??
         playable.find((c) =>
           ["skip", "reverse"].includes(parseCard(c).value),
         ) ??
         playable[0];
-
       const { color } = parseCard(card);
       const chosenColor =
         color === "wild"
           ? (COLORS[Math.floor(Math.random() * 4)] as string)
           : color;
-
       const handCopy = [...bot.hand];
       handCopy.splice(handCopy.indexOf(card), 1);
       const parsedCard = parseCard(card);
       let botLastAction = `🤖 ${bot.name} played ${card}`;
-
       const newColor =
         parsedCard.color === "wild" ? chosenColor : parsedCard.color;
       let newDirection = game.direction;
@@ -1239,38 +1333,37 @@ export const botTurn = internalMutation({
           numPlayers === 2
             ? (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers
             : (nextIndex + newDirection + numPlayers) % numPlayers;
-        botLastAction += " --- Direction reversed!";
+        botLastAction += " -- Direction reversed!";
       } else if (parsedCard.value === "skip") {
         nextIndex =
           (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers;
-        botLastAction += " --- Next player skipped!";
+        botLastAction += " -- Next player skipped!";
       } else if (parsedCard.value === "draw2") {
         newDrawStack += 2;
         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
-        botLastAction += ` --- Next player must draw ${newDrawStack}!`;
+        botLastAction += ` -- Next player must draw ${newDrawStack}!`;
       } else if (card === "wild_draw4") {
         newDrawStack += 4;
         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
-        botLastAction += ` --- Next player must draw ${newDrawStack} and color is ${newColor}!`;
+        botLastAction += ` -- Next player must draw ${newDrawStack} and color is ${newColor}!`;
       } else {
         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
       }
-
       if (parsedCard.value !== "draw2" && card !== "wild_draw4") {
         newDrawStack = 0;
       }
+      if (card === "wild") botLastAction += ` -- Color changed to ${newColor}!`;
 
-      if (card === "wild")
-        botLastAction += ` --- Color changed to ${newColor}!`;
-
-      // ── Check for "going out" --- wealth-gated, same as human players ────
+      // ── Check for "going out" -- wealth-gated, same as human players ──
       if (handCopy.length === 0) {
         const allPlayers = await ctx.db
           .query("players")
           .withIndex("by_room", (q) => q.eq("roomId", roomId))
           .collect();
-
-        const myWealth = wealthOf(bot);
+        const myWealth = wealthOf({
+          money: botMoney,
+          properties: botProperties,
+        });
         const otherWealths = allPlayers
           .filter((p) => p.userId !== botId)
           .map((p) => wealthOf(p));
@@ -1279,18 +1372,25 @@ export const botTurn = internalMutation({
         const eligibleToWin = myWealth >= maxOtherWealth;
 
         if (eligibleToWin) {
-          await ctx.db.patch(bot._id, { hand: [] });
+          await ctx.db.patch(bot._id, {
+            hand: [],
+            money: botMoney,
+            properties: botProperties,
+            ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
+          });
           await ctx.db.patch(game._id, {
             discardPile: [...game.discardPile, card],
+            gambleDeck,
+            ...(botGambleNotice ? { botGambleNotice } : {}),
             winnerId: botId,
             status: "finished",
-            lastAction: `🤖🎉 ${bot.name} went out with $${myWealth.toLocaleString()} in total wealth --- the richest player --- and wins!`,
+            lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}🤖🎉 ${bot.name} went out with $${myWealth.toLocaleString()} in total wealth -- the richest player -- and wins!`,
           });
           await ctx.db.patch(roomId, { status: "finished" });
           return;
         }
 
-        // Blocked --- draw 2 (through the same life/property pipeline) and stay in.
+        // Blocked -- draw 2 (through the same life/property pipeline) and stay in.
         const resolved = drawAndResolve(2, game.deck, [
           ...game.discardPile,
           card,
@@ -1300,16 +1400,18 @@ export const botTurn = internalMutation({
           0,
         );
         const { money: botMoneyAfterDraw, properties: botPropsAfterDraw } =
-          resolveBotPropertyOffers(bot.money ?? 0, resolved.propertyOffers);
-
+          resolveBotPropertyOffers(
+            botMoney,
+            resolved.propertyOffers,
+            difficulty,
+          );
         await ctx.db.patch(bot._id, {
           hand: [...handCopy, ...resolved.keep],
           money: botMoneyAfterDraw + lifeMoneyDelta,
-          properties: [...(bot.properties ?? []), ...botPropsAfterDraw],
+          properties: [...botProperties, ...botPropsAfterDraw],
+          ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
         });
-
         const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
-
         await ctx.db.patch(game._id, {
           deck: resolved.deck,
           discardPile: resolved.discardPile,
@@ -1318,22 +1420,25 @@ export const botTurn = internalMutation({
           direction: newDirection,
           drawStack: newDrawStack,
           turnCount: newTurnCount,
+          gambleDeck,
+          ...(botGambleNotice ? { botGambleNotice } : {}),
           ...(salaryNotice ? { salaryNotice } : {}),
-          lastAction: `🤖 ${bot.name} went out but only has $${myWealth.toLocaleString()} --- not the richest! Forced to draw 2 and stay in the game.`,
+          lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}🤖 ${bot.name} went out but only has $${myWealth.toLocaleString()} -- not the richest! Forced to draw 2 and stay in the game.`,
         });
-
         const nextPlayerId = game.playerOrder[nextIndex];
         if (nextPlayerId.startsWith("bot_")) {
-          await ctx.scheduler.runAfter(1500, internal.game.botTurn, {
-            roomId,
-          });
+          await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
         }
         return;
       }
 
-      await ctx.db.patch(bot._id, { hand: handCopy });
+      await ctx.db.patch(bot._id, {
+        hand: handCopy,
+        money: botMoney,
+        properties: botProperties,
+        ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
+      });
       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
-
       await ctx.db.patch(game._id, {
         discardPile: [...game.discardPile, card],
         currentColor: newColor,
@@ -1341,10 +1446,11 @@ export const botTurn = internalMutation({
         direction: newDirection,
         drawStack: newDrawStack,
         turnCount: newTurnCount,
+        gambleDeck,
+        ...(botGambleNotice ? { botGambleNotice } : {}),
         ...(salaryNotice ? { salaryNotice } : {}),
-        lastAction: botLastAction,
+        lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}${botLastAction}`,
       });
-
       const nextPlayerId = game.playerOrder[nextIndex];
       if (nextPlayerId.startsWith("bot_")) {
         await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
@@ -1357,29 +1463,28 @@ export const botTurn = internalMutation({
         0,
       );
       const { money: botMoneyAfterDraw, properties: botPropsAfterDraw } =
-        resolveBotPropertyOffers(bot.money ?? 0, resolved.propertyOffers);
-
+        resolveBotPropertyOffers(botMoney, resolved.propertyOffers, difficulty);
       await ctx.db.patch(bot._id, {
         hand: [...bot.hand, ...resolved.keep],
         money: botMoneyAfterDraw + lifeMoneyDelta,
-        properties: [...(bot.properties ?? []), ...botPropsAfterDraw],
+        properties: [...botProperties, ...botPropsAfterDraw],
+        ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
       });
-
       const numPlayers = game.playerOrder.length;
       const nextIndex =
         (game.currentPlayerIndex + game.direction + numPlayers) % numPlayers;
       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
-
       await ctx.db.patch(game._id, {
         deck: resolved.deck,
         discardPile: resolved.discardPile,
         drawStack: 0,
         currentPlayerIndex: nextIndex,
         turnCount: newTurnCount,
+        gambleDeck,
+        ...(botGambleNotice ? { botGambleNotice } : {}),
         ...(salaryNotice ? { salaryNotice } : {}),
-        lastAction: `🤖 ${bot.name} drew ${drawCount} card${drawCount > 1 ? "s" : ""}`,
+        lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}🤖 ${bot.name} drew ${drawCount} card${drawCount > 1 ? "s" : ""}`,
       });
-
       const nextPlayerId = game.playerOrder[nextIndex];
       if (nextPlayerId.startsWith("bot_")) {
         await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
@@ -1410,3 +1515,54 @@ export const getFinishedGamesForUser = query({
     return allFinished.filter((game) => game.playerOrder.includes(userId));
   },
 });
+
+// Run once per bot turn. A bot upgrades at most one property per turn —
+// matches the pace of a human player clicking "upgrade" once — and only
+// when it can afford it without dipping under its difficulty's buffer.
+// Aggressive bots go after their most expensive property first (biggest
+// rent payoff); conservative bots go after their cheapest (smallest cash
+// commitment). That ordering difference is what makes the two personalities
+// visibly distinct in a game, not just "buys more stuff."
+function resolveBotUpgrade(
+  money: number,
+  properties: BotProperty[],
+  difficulty: BotDifficulty,
+): { money: number; properties: BotProperty[]; label: string | null } {
+  const { upgradeBuffer } = BOT_DIFFICULTY[difficulty];
+
+  const candidates = properties
+    .map((prop, idx) => ({ prop, idx, upgrade: nextUpgradeFor(prop) }))
+    .filter(
+      (
+        c,
+      ): c is {
+        prop: BotProperty;
+        idx: number;
+        upgrade: NonNullable<ReturnType<typeof nextUpgradeFor>>;
+      } => c.upgrade !== null,
+    )
+    .sort((a, b) =>
+      difficulty === "aggressive"
+        ? b.prop.price - a.prop.price
+        : a.prop.price - b.prop.price,
+    );
+
+  for (const { prop, idx, upgrade } of candidates) {
+    const cost = Math.round(prop.price * upgrade.costMultiplier);
+    if (money - cost < upgradeBuffer) continue;
+    const valueGain = Math.round(prop.price * upgrade.valueMultiplier);
+    const updated = [...properties];
+    updated[idx] = {
+      ...prop,
+      value: prop.value + valueGain,
+      invested: (prop.invested ?? prop.price) + cost,
+      upgrades: [...(prop.upgrades ?? []), upgrade.id],
+    };
+    return {
+      money: money - cost,
+      properties: updated,
+      label: `${upgrade.emoji} ${prop.name} +${upgrade.label}`,
+    };
+  }
+  return { money, properties, label: null };
+}
