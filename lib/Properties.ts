@@ -1,0 +1,16 @@
+export const PROPERTIES = [
+  { id: "property_wendyhouse", label: "Wendy House", price: 150, value: 210 },
+  { id: "property_studio", label: "Studio Flat", price: 350, value: 500 },
+  { id: "property_apartment", label: "Apartment", price: 600, value: 850 },
+  { id: "property_cottage", label: "Cottage", price: 900, value: 1280 },
+  { id: "property_house", label: "Suburban House", price: 1200, value: 1700 },
+  { id: "property_townhouse", label: "Townhouse", price: 1600, value: 2250 },
+  { id: "property_cabin", label: "Log Cabin", price: 1900, value: 2650 },
+  { id: "property_condo", label: "Beach Condo", price: 2000, value: 2800 },
+  { id: "property_villa", label: "Villa", price: 2600, value: 3600 },
+  { id: "property_hotel", label: "Boutique Hotel", price: 3200, value: 4400 },
+  { id: "property_penthouse", label: "Penthouse", price: 3800, value: 5150 },
+  { id: "property_mansion", label: "Mansion", price: 5000, value: 6800 },
+  { id: "property_castle", label: "Castle", price: 6500, value: 8700 },
+  { id: "property_island", label: "Private Island", price: 8500, value: 11200 },
+] as const;

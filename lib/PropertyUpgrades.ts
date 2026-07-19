@@ -1,0 +1,77 @@
+export const PROPERTY_UPGRADES = [
+  {
+    id: "upgrade_paint",
+    label: "Fresh Paint Job",
+    emoji: "🎨",
+    description: "A cheap cosmetic refresh that makes buyers take notice.",
+    costMultiplier: 0.15,
+    valueMultiplier: 0.12,
+  },
+  {
+    id: "upgrade_flooring",
+    label: "New Flooring",
+    emoji: "🪵",
+    description: "Ripped up the old carpet for something buyers actually want.",
+    costMultiplier: 0.2,
+    valueMultiplier: 0.16,
+  },
+  {
+    id: "upgrade_kitchen",
+    label: "Renovated Kitchen",
+    emoji: "🍳",
+    description: "New countertops and appliances bump resale value.",
+    costMultiplier: 0.28,
+    valueMultiplier: 0.22,
+  },
+  {
+    id: "upgrade_bathroom",
+    label: "Modern Bathroom",
+    emoji: "🛁",
+    description:
+      "Ripped out the old suite for something straight off a showroom floor.",
+    costMultiplier: 0.33,
+    valueMultiplier: 0.26,
+  },
+  {
+    id: "upgrade_landscaping",
+    label: "Landscaped Garden",
+    emoji: "🌳",
+    description:
+      "Curb appeal matters — a proper garden makes a strong first impression.",
+    costMultiplier: 0.38,
+    valueMultiplier: 0.3,
+  },
+  {
+    id: "upgrade_pool",
+    label: "Swimming Pool",
+    emoji: "🏊",
+    description: "A backyard pool — pricey, but a serious value boost.",
+    costMultiplier: 0.45,
+    valueMultiplier: 0.35,
+  },
+  {
+    id: "upgrade_smarthome",
+    label: "Smart Home System",
+    emoji: "🏠",
+    description:
+      "Automated lighting, locks, and thermostat — buyers pay for convenience.",
+    costMultiplier: 0.52,
+    valueMultiplier: 0.41,
+  },
+  {
+    id: "upgrade_extension",
+    label: "Extra Floor",
+    emoji: "🏗️",
+    description: "A full extension — a serious structural upgrade.",
+    costMultiplier: 0.6,
+    valueMultiplier: 0.5,
+  },
+  {
+    id: "upgrade_wing",
+    label: "Guest Wing",
+    emoji: "🏛️",
+    description: "A full additional wing — the biggest upgrade available.",
+    costMultiplier: 0.72,
+    valueMultiplier: 0.6,
+  },
+] as const;

@@ -3,6 +3,10 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { GAMBLE_EVENTS, gambleDef } from "../lib/Gambleevents";
+import { LIFE_EVENTS } from "@/lib/LifeEvents";
+import { PROPERTIES } from "@/lib/Properties";
+import { PROPERTY_UPGRADES } from "@/lib/PropertyUpgrades";
 
 // ─── Deck Helpers ────────────────────────────────────────────────────
 const COLORS = ["red", "blue", "green", "yellow"] as const;
@@ -10,79 +14,6 @@ const NUMBERS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 const ACTIONS = ["skip", "reverse", "draw2"];
 const WILDS = ["wild", "wild_draw4"];
 
-// ─── Monopoly-Uno additions ──────────────────────────────────────────
-// "life" (money/expense) and "property" cards are never dealt into, or
-// playable from, a hand. The instant one is drawn --- during the initial
-// deal, a normal draw, or a forced draw-2/draw-4 penalty --- it's resolved
-// immediately: a life card pays out/charges the player on the spot, a
-// property card becomes a pending Accept/Decline offer. See
-// drawAndResolve/dealInitialHand below and the drawCard/botTurn mutations.
-export const LIFE_EVENTS = [
-  { id: "life_lottery", label: "Lottery Win", amount: 10000 },
-  { id: "life_bonus", label: "Work Bonus", amount: 1500 },
-  { id: "life_gift", label: "Birthday Gift", amount: 500 },
-  { id: "life_carrepair", label: "Car Breakdown", amount: -400 },
-  { id: "life_medical", label: "Medical Bill", amount: -800 },
-  { id: "life_tax", label: "Tax Bill", amount: -1200 },
-  { id: "life_fine", label: "Parking Fine", amount: -150 },
-  { id: "life_rent", label: "Rent Due", amount: -1000 },
-] as const;
-
-// Property cards hand the player an Accept/Decline offer (game.respondProperty)
-// the moment they're drawn --- they can act on it whenever they like, it
-// doesn't block their turn.
-//
-// ─── Price pass ──────────────────────────────────────────────────────
-// Prices scaled way down from the original 3000-25000 range (which meant a
-// player could barely afford even the cheapest property on their entire
-// starting $3000). These let someone snag an apartment within their first
-// couple of draws while keeping the same ~40% value-over-price margin.
-
-// ─── Property upgrades ──────────────────────────────────────────────
-// A 4-tier ladder purchased in order per property instance. Cost/value
-// gain scale off the property's original purchase price so cheap and
-// expensive properties both feel proportionate. Upgrading also raises
-// `invested`, which feeds rent — so it's not just a one-off wealth bump,
-// it's an ongoing income decision.
-export const PROPERTY_UPGRADES = [
-  {
-    id: "upgrade_paint",
-    label: "Fresh Paint Job",
-    emoji: "🎨",
-    description: "A cheap cosmetic refresh that makes buyers take notice.",
-    costMultiplier: 0.15,
-    valueMultiplier: 0.12,
-  },
-  {
-    id: "upgrade_kitchen",
-    label: "Renovated Kitchen",
-    emoji: "🍳",
-    description: "New countertops and appliances bump resale value.",
-    costMultiplier: 0.28,
-    valueMultiplier: 0.22,
-  },
-  {
-    id: "upgrade_pool",
-    label: "Swimming Pool",
-    emoji: "🏊",
-    description: "A backyard pool — pricey, but a serious value boost.",
-    costMultiplier: 0.45,
-    valueMultiplier: 0.35,
-  },
-  {
-    id: "upgrade_extension",
-    label: "Extra Floor",
-    emoji: "🏗️",
-    description: "A full extension — the biggest upgrade available.",
-    costMultiplier: 0.6,
-    valueMultiplier: 0.5,
-  },
-] as const;
-
-// ─── Bot difficulty tuning ─────────────────────────────────────────────
-// Every knob a bot's decision-making touches, gathered in one place so the
-// two personalities are easy to compare and retune. Conservative is the
-// old flat-$150-buffer behavior; aggressive is new.
 const BOT_DIFFICULTY = {
   aggressive: {
     // Cash buffer a bot insists on keeping after buying a property.
@@ -115,183 +46,12 @@ function makeInstanceId() {
   return `prop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export const PROPERTIES = [
-  { id: "property_apartment", label: "Apartment", price: 600, value: 850 },
-  { id: "property_house", label: "Suburban House", price: 1200, value: 1700 },
-  { id: "property_condo", label: "Beach Condo", price: 2000, value: 2800 },
-  { id: "property_hotel", label: "Boutique Hotel", price: 3200, value: 4400 },
-  { id: "property_mansion", label: "Mansion", price: 5000, value: 6800 },
-] as const;
-
-// ─── Gamble stack additions ──────────────────────────────────────────
-// A side stack, separate from the main Uno deck entirely. It's purely
-// optional and purely elective: on your turn you can tap it to pull one
-// card, purely a "life happens" flavor event (a friend gives you cash, the
-// plumber bill shows up, etc.), and it never counts as your turn action ---
-// you still have to play a card or draw from the main pile to actually pass
-// play. See drawGambleCard/acknowledgeGambleEvent below.
-//
-// Balance pass: of the 18 cards in the catalog,
-//   - 4 are dramatic LOSSES  (wipeOut: true --- your cash goes to $0)
-//   - 4 are dramatic WINS    (jackpot: true --- a big flat bonus)
-//   - 10 are modest, in-between swings (small gains and small bills)
-// so a pull is mostly a minor nudge with an occasional huge high or low.
-export const GAMBLE_EVENTS = [
-  // ── Dramatic losses (wipe cash to $0) ──────────────────────────────
-  {
-    id: "gamble_casino",
-    label: "Casino Meltdown",
-    description: "A wild night at the casino wiped out your entire wallet.",
-    wipeOut: true,
-    jackpot: false,
-  },
-  {
-    id: "gamble_badinvestment",
-    label: "Bad Investment",
-    description: "The startup you bet on collapsed overnight. Savings: gone.",
-    wipeOut: true,
-    jackpot: false,
-  },
-  {
-    id: "gamble_identitytheft",
-    label: "Identity Theft",
-    description: "Someone cleaned out your account before the bank caught it.",
-    wipeOut: true,
-    jackpot: false,
-  },
-  {
-    id: "gamble_housefire",
-    label: "House Fire",
-    description: "Insurance didn't cover it. Every last cent went to repairs.",
-    wipeOut: true,
-    jackpot: false,
-  },
-  // ── Dramatic wins (big flat bonus) ─────────────────────────────────
-  {
-    id: "gamble_jackpot",
-    label: "Lottery Jackpot",
-    description: "Your numbers hit. All of them.",
-    amount: 5000,
-    wipeOut: false,
-    jackpot: true,
-  },
-  {
-    id: "gamble_inheritance",
-    label: "Surprise Inheritance",
-    description: "A distant relative you barely remember left you a fortune.",
-    amount: 4000,
-    wipeOut: false,
-    jackpot: true,
-  },
-  {
-    id: "gamble_startupsold",
-    label: "Startup Sold",
-    description: "The company you had shares in just got acquired.",
-    amount: 6000,
-    wipeOut: false,
-    jackpot: true,
-  },
-  {
-    id: "gamble_lawsuit",
-    label: "Won a Lawsuit",
-    description: "The court ruled in your favor. Settlement check incoming.",
-    amount: 3500,
-    wipeOut: false,
-    jackpot: true,
-  },
-  // ── Modest, in-between swings ───────────────────────────────────────
-  {
-    id: "gamble_friendgift",
-    label: "Generous Friend",
-    description: "A friend gave you $200, no strings attached.",
-    amount: 200,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_plumber",
-    label: "Plumber Bill",
-    description: "The tap finally broke. The plumber wasn't cheap.",
-    amount: -150,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_soldfurniture",
-    label: "Sold Old Furniture",
-    description: "That couch in storage just became someone else's problem.",
-    amount: 100,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_parkingticket",
-    label: "Parking Ticket",
-    description: "You really should have read that sign.",
-    amount: -75,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_foundcash",
-    label: "Found Cash",
-    description: "An old coat pocket had a nice surprise in it.",
-    amount: 50,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_cartires",
-    label: "New Tires",
-    description: "The car needed new tires. All four of them.",
-    amount: -300,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_sidegig",
-    label: "Side Gig Payout",
-    description: "That weekend gig finally paid out.",
-    amount: 250,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_crackedscreen",
-    label: "Cracked Screen",
-    description: "The phone slipped. The repair bill didn't.",
-    amount: -120,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_cashback",
-    label: "Cashback Rewards",
-    description: "Your card's rewards program finally paid off.",
-    amount: 80,
-    wipeOut: false,
-    jackpot: false,
-  },
-  {
-    id: "gamble_vetbill",
-    label: "Vet Bill",
-    description: "The dog is fine. Your wallet is not.",
-    amount: -200,
-    wipeOut: false,
-    jackpot: false,
-  },
-] as const;
-
 function lifeEvent(cardId: string) {
   return LIFE_EVENTS.find((e) => e.id === cardId);
 }
 
 function propertyDef(cardId: string) {
   return PROPERTIES.find((p) => p.id === cardId);
-}
-
-function gambleDef(cardId: string) {
-  return GAMBLE_EVENTS.find((g) => g.id === cardId);
 }
 
 function wealthOf(p: { money?: number; properties?: { value: number }[] }) {
@@ -344,12 +104,6 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-// ─── Draw-time resolution of life/property cards ───────────────────────
-// "life" and "property" cards are never allowed to sit in a hand. The instant
-// one is drawn (whether from a normal draw, a forced draw-2/draw-4 penalty,
-// or the initial deal) it is pulled out of the deck permanently: a life card
-// pays out/charges the player immediately, a property card becomes a pending
-// Accept/Decline offer. Only ordinary Uno cards make it into `keep`.
 interface ResolvedDraw {
   deck: string[];
   discardPile: string[];
@@ -382,9 +136,6 @@ function drawAndResolve(
     const prop = propertyDef(cardId);
     if (life) {
       lifeEvents.push({ id: life.id, label: life.label, amount: life.amount });
-      // Removed from the game entirely --- must NOT go into discardPile, or it
-      // could become the visible "top card" and hijack game.currentColor
-      // even though it was never actually played.
     } else if (prop) {
       propertyOffers.push({
         id: prop.id,
@@ -392,7 +143,6 @@ function drawAndResolve(
         price: prop.price,
         value: prop.value,
       });
-      // Same reasoning as above --- never touches discardPile.
     } else {
       keep.push(cardId);
     }
@@ -433,16 +183,12 @@ function dealInitialHand(
 }
 
 // ─── Salary: every 8th turn *per player* (a 7-day week, then payday --- "next
-// Monday") --- everyone still in the game gets paid $200 ────────────────────
+// Monday") --- everyone still in the game gets paid. Amount grows a little
+// each payday instead of staying flat at $200. ─────────────────────────────
 const SALARY_INTERVAL = 8;
-const SALARY_AMOUNT = 200;
+const SALARY_BASE = 500; // salary on the very first payday
+const SALARY_GROWTH_PER_PAYDAY = 50; // flat increase each payday after that
 
-// ─── Rent additions ──────────────────────────────────────────────────────
-// A player who owns MORE THAN ONE property earns passive rent every payday
-// on top of their flat salary --- 17% of the combined purchase price (not
-// resale value) of everything they own. A single property is just a home,
-// not a rental portfolio, so it earns nothing; two or more is what flips a
-// player into "landlord" mode.
 const RENT_PERCENTAGE = 0.17;
 const RENT_MIN_PROPERTIES = 2;
 
@@ -475,10 +221,6 @@ async function paySalaryIfDue(
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .collect();
 
-  // turnCount increments once per action across ALL players, not once per
-  // full lap around the table --- scale the interval by player count so "8
-  // turns" means 8 turns for each individual player, regardless of table
-  // size (otherwise a 2-player game pays out every 4 of your own turns).
   const numPlayers = allPlayers.length || 1;
   const scaledInterval = SALARY_INTERVAL * numPlayers;
 
@@ -486,12 +228,19 @@ async function paySalaryIfDue(
     return undefined;
   }
 
+  // Which payday is this? 1st, 2nd, 3rd... --- used to scale the amount up
+  // a little each time so the salary keeps pace as the game (and property
+  // prices) get bigger later on.
+  const paydayNumber = newTurnCount / scaledInterval;
+  const salaryAmount =
+    SALARY_BASE + (paydayNumber - 1) * SALARY_GROWTH_PER_PAYDAY;
+
   const rentByPlayer: { userId: string; amount: number }[] = [];
 
   for (const p of allPlayers) {
     const rent = calculateRent(p.properties);
     await ctx.db.patch(p._id, {
-      money: (p.money ?? 0) + SALARY_AMOUNT + rent,
+      money: (p.money ?? 0) + salaryAmount + rent,
     });
     if (rent > 0) {
       rentByPlayer.push({ userId: p.userId, amount: rent });
@@ -500,20 +249,12 @@ async function paySalaryIfDue(
 
   return {
     turnCount: newTurnCount,
-    amount: SALARY_AMOUNT,
+    amount: salaryAmount,
     rentByPlayer,
     at: Date.now(),
   };
 }
 
-// Bots have no UI to show an Accept/Decline modal, so any property offers
-// they draw into are decided immediately with a simple heuristic: buy it if
-// they can afford it and still keep a $150 cash buffer, otherwise pass.
-// Bots have no UI to show an Accept/Decline modal, so any property offers
-// they draw into are decided immediately with a simple heuristic: buy it if
-// they can afford it and still keep their difficulty's cash buffer,
-// otherwise pass. Aggressive bots run a much thinner buffer, so they end up
-// owning more (and pricier) properties over a game.
 function resolveBotPropertyOffers(
   startingMoney: number,
   offers: { id: string; name: string; price: number; value: number }[],
@@ -587,9 +328,6 @@ export function canPlayCard(
   return false;
 }
 
-// Whether a card is allowed to be played on top of an active draw stack ---
-// either a +2 or a +4 (wild_draw4) can stack on top of EITHER a +2 or a +4,
-// so players can escalate/pass the penalty back and forth freely.
 function isStackableDrawCard(cardId: string): boolean {
   const { value } = parseCard(cardId);
   return value === "draw2" || cardId === "wild_draw4";
@@ -653,9 +391,6 @@ export const startGame = mutation({
     let deck = createDeck();
     const hands: Record<string, string[]> = {};
 
-    // Deal 7 real cards to each player --- life/property cards hit along the
-    // way are skipped (not resolved), so every player starts with an
-    // identical $3000 and no pending offers.
     for (const player of sortedPlayers) {
       const dealt = dealInitialHand(7, deck);
       deck = dealt.deck;
@@ -715,11 +450,6 @@ export const startGame = mutation({
   },
 });
 
-// ─── Play Card ───────────────────────────────────────────────────────────
-// NOTE: life-event and property cards can never appear in a hand anymore ---
-// they're resolved the instant they're drawn (see drawAndResolve / drawCard /
-// botTurn below) --- so this mutation only ever has to deal with ordinary Uno
-// cards (numbers, actions, wilds).
 export const playCard = mutation({
   args: {
     roomId: v.id("rooms"),
@@ -912,10 +642,6 @@ export const playCard = mutation({
   },
 });
 
-// ─── Respond to a Property Offer ──────────────────────────────────────────
-// Always resolves the OLDEST queued offer (pendingProperties[0]) --- if a
-// forced multi-card draw queued up more than one, the player works through
-// them one at a time, in the order they were drawn.
 export const respondProperty = mutation({
   args: { roomId: v.id("rooms"), userId: v.string(), accept: v.boolean() },
   handler: async (ctx, { roomId, userId, accept }) => {
@@ -981,10 +707,6 @@ export const respondProperty = mutation({
   },
 });
 
-// ─── Upgrade a Property ──────────────────────────────────────────────
-// Not turn-gated — like respondProperty, this is a standing financial
-// decision the player can make any time it's available, not an action
-// that consumes their turn.
 export const upgradeProperty = mutation({
   args: { roomId: v.id("rooms"), userId: v.string(), instanceId: v.string() },
   handler: async (ctx, { roomId, userId, instanceId }) => {
@@ -1119,9 +841,6 @@ export const drawGambleCard = mutation({
   },
 });
 
-// ─── Acknowledge Gamble Event ───────────────────────────────────────────
-// Money was already applied the instant the card was pulled --- this just
-// clears the pending event so the "you won/lost $X" modal goes away.
 export const acknowledgeGambleEvent = mutation({
   args: { roomId: v.id("rooms"), userId: v.string() },
   handler: async (ctx, { roomId, userId }) => {
@@ -1200,16 +919,6 @@ export const drawCard = mutation({
   },
 });
 
-// ─── Bot Turn (Internal) ──────────────────────────────────────────────────
-// Bots never end up holding a life/property card either (draw-time
-// resolution applies to them too), so their "playable" filter and play
-// logic below only ever has to deal with ordinary Uno cards. When a bot
-// draws into a property offer it decides immediately with a simple
-// affordability heuristic instead of leaving a modal open --- there's no UI
-// for a bot to see. Bots also never touch the Gamble stack --- it's a
-// player-elective feature with no UI for a bot to reason about, so bots
-// just skip it entirely and play normally.
-
 export const botTurn = internalMutation({
   args: { roomId: v.id("rooms") },
   handler: async (ctx, { roomId }) => {
@@ -1231,17 +940,6 @@ export const botTurn = internalMutation({
     const difficulty = difficultyOf(bot);
     const turnCount = game.turnCount ?? 0;
 
-    // NEW — Gamble stack pull, mirrors drawGambleCard's mechanics inline
-    // since a bot can't hit its own UI button. Chance-gated by difficulty;
-    // still respects the one-pull-per-turn rule via lastGambleTurn.
-    //
-    // botGambleNotice is a separate broadcast field (see schema.ts) rather
-    // than reusing pendingGambleEvent, because pendingGambleEvent lives on
-    // the *player* doc and only that player's own client reads it to show
-    // their "you won/lost $X" modal — a bot has no client to show it to
-    // itself, and there's no single human "owner" of the event to attach
-    // it to. botGambleNotice lives on the game doc instead, so every human
-    // at the table sees it, the same way everyone already sees salaryNotice.
     let botMoney = bot.money ?? 0;
     let gambleDeck = [...(game.gambleDeck ?? [])];
     let gambleLastAction: string | null = null;
@@ -1516,13 +1214,6 @@ export const getFinishedGamesForUser = query({
   },
 });
 
-// Run once per bot turn. A bot upgrades at most one property per turn —
-// matches the pace of a human player clicking "upgrade" once — and only
-// when it can afford it without dipping under its difficulty's buffer.
-// Aggressive bots go after their most expensive property first (biggest
-// rent payoff); conservative bots go after their cheapest (smallest cash
-// commitment). That ordering difference is what makes the two personalities
-// visibly distinct in a game, not just "buys more stuff."
 function resolveBotUpgrade(
   money: number,
   properties: BotProperty[],
