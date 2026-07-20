@@ -19,6 +19,7 @@ import { useSoundManager } from "@/hooks/useSoundManager";
 import { VideoLobby } from "./Videolobby";
 import { PaydayTracker } from "./PaydayTracker";
 import { AnimatedCash } from "./Animatedcash";
+import { ConfettiBurst } from "./Confetti";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -239,6 +240,15 @@ export function GameBoard({
     cashBefore: number;
     cashAfter: number;
   } | null>(null);
+  // ─── Confetti additions ─────────────────────────────────────────────
+  // A single shared trigger for every "your wealth just went up" moment:
+  // a positive life-event card, a winning/jackpot Gamble stack pull, and
+  // payday. Any value change (Date.now() gives us a fresh one each time)
+  // fires ConfettiBurst — see the effects below and its render near the
+  // top of the return.
+  const [moneyConfettiTrigger, setMoneyConfettiTrigger] = useState<
+    number | null
+  >(null);
 
   const { selected: boardBg } = useBackground();
 
@@ -400,8 +410,48 @@ export function GameBoard({
       cashBefore,
       cashAfter,
     });
+    // Payday always increases wealth (salary is never negative, rent adds
+    // on top) --- burst every time, for every player at the table.
+    setMoneyConfettiTrigger(Date.now());
     play("cardDeal");
   }, [game.salaryNotice, currentUserId, myMoney, play]);
+
+  // ─── Confetti: positive life-event cards ──────────────────────────────
+  // pendingLifeEvents has no timestamp to key off (unlike salaryNotice/
+  // botGambleNotice), so we key on the queue's own contents and only fire
+  // when that key actually changes --- otherwise unrelated re-renders
+  // would keep re-triggering the burst for the same draw.
+  const lastLifeEventKey = useRef<string>("");
+  useEffect(() => {
+    if (myPendingLifeEvents.length === 0) {
+      lastLifeEventKey.current = "";
+      return;
+    }
+    const key = myPendingLifeEvents.map((e) => `${e.id}:${e.amount}`).join("|");
+    if (lastLifeEventKey.current === key) return;
+    lastLifeEventKey.current = key;
+    const totalDelta = myPendingLifeEvents.reduce((s, e) => s + e.amount, 0);
+    if (totalDelta > 0) setMoneyConfettiTrigger(Date.now());
+  }, [myPendingLifeEvents]);
+
+  // ─── Confetti: winning/jackpot Gamble stack pulls ─────────────────────
+  // Same key-based dedup approach as above, applied to the single pending
+  // gamble event. Only bursts on an actual win (or jackpot) --- never on a
+  // loss or wipeout.
+  const lastGambleKey = useRef<string>("");
+  useEffect(() => {
+    if (!myPendingGambleEvent) {
+      lastGambleKey.current = "";
+      return;
+    }
+    const g = myPendingGambleEvent;
+    const key = `${g.id}:${g.amount}:${g.wipeOut}:${g.jackpot}`;
+    if (lastGambleKey.current === key) return;
+    lastGambleKey.current = key;
+    if (!g.wipeOut && (g.amount > 0 || g.jackpot)) {
+      setMoneyConfettiTrigger(Date.now());
+    }
+  }, [myPendingGambleEvent]);
 
   // Mirrors the salaryNotice effect above: game.botGambleNotice.at gets a
   // fresh timestamp every time a bot pulls the Gamble stack, so this just
@@ -631,6 +681,11 @@ export function GameBoard({
       className="min-h-screen flex flex-col overflow-hidden relative"
       style={!boardBg.src ? { background: TABLE_BG } : undefined}
     >
+      {/* ── Confetti --- fires for positive life events, Gamble wins/jackpots,
+          and payday. Fixed/full-screen internally, so placement here is
+          just for readability, not layout. ───────────────────────────── */}
+      <ConfettiBurst trigger={moneyConfettiTrigger} variant="money" />
+
       {/* Background image layer */}
       {boardBg.src && (
         <img
