@@ -88,45 +88,50 @@ export default function Home() {
         />
       </div>
 
-      {/* Floating demo cards */}
-      <div className="relative h-56 w-full max-w-lg mb-10">
-        {DEMO_CARDS.map((card, i) => (
-          <motion.div
-            key={i}
-            className={`absolute w-16 h-24 rounded-2xl ${card.color} shadow-xl border-2 border-white/30 flex flex-col items-center justify-center gap-0.5`}
-            style={{
-              left: "50%",
-              top: "50%",
-              marginLeft: card.x - 32,
-              marginTop: card.y - 48,
-              rotate: card.rotate,
-              zIndex: i,
-            }}
-            animate={{ y: [0, -10, 0] }}
-            transition={{
-              duration: 3,
-              delay: i * 0.4,
-              repeat: Infinity,
-              ease: "easeInOut",
-            }}
-          >
-            <div className="bg-white/20 rounded-full w-11 h-14 flex flex-col items-center justify-center border border-white/30 px-1">
-              <span className="font-bold text-white text-sm drop-shadow leading-none text-center">
-                {card.value}
-              </span>
-              {card.sub && (
-                <span className="text-white/80 text-[8px] font-semibold leading-none mt-1">
-                  {card.sub}
-                </span>
-              )}
-            </div>
-          </motion.div>
-        ))}
+      {/* Floating demo cards — scaled down on narrow viewports so all five
+          cards stay inside the screen instead of overflowing/clipping. */}
+      <div className="relative h-28 xs:h-36 sm:h-44 md:h-56 w-full max-w-lg mb-10">
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="relative scale-[0.5] xs:scale-[0.62] sm:scale-90 md:scale-100 origin-center">
+            {DEMO_CARDS.map((card, i) => (
+              <motion.div
+                key={i}
+                className={`absolute w-16 h-24 rounded-2xl ${card.color} shadow-xl border-2 border-white/30 flex flex-col items-center justify-center gap-0.5`}
+                style={{
+                  left: "50%",
+                  top: "50%",
+                  marginLeft: card.x - 32,
+                  marginTop: card.y - 48,
+                  rotate: card.rotate,
+                  zIndex: i,
+                }}
+                animate={{ y: [0, -10, 0] }}
+                transition={{
+                  duration: 3,
+                  delay: i * 0.4,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              >
+                <div className="bg-white/20 rounded-full w-11 h-14 flex flex-col items-center justify-center border border-white/30 px-1">
+                  <span className="font-bold text-white text-sm drop-shadow leading-none text-center">
+                    {card.value}
+                  </span>
+                  {card.sub && (
+                    <span className="text-white/80 text-[8px] font-semibold leading-none mt-1">
+                      {card.sub}
+                    </span>
+                  )}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Hero text */}
       <motion.h1
-        className="text-5xl md:text-7xl font-bold tracking-tight max-w-4xl text-black dark:text-white drop-shadow-lg relative z-10"
+        className="text-4xl sm:text-5xl md:text-7xl font-bold tracking-tight max-w-4xl text-black dark:text-white drop-shadow-lg relative z-10"
         initial={{ opacity: 0, y: 40 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7 }}
@@ -138,7 +143,7 @@ export default function Home() {
       </motion.h1>
 
       <motion.p
-        className="mt-5 text-gray-600 dark:text-purple-200 text-lg max-w-xl relative z-10"
+        className="mt-5 text-gray-600 dark:text-purple-200 text-base sm:text-lg max-w-xl relative z-10"
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.7 }}
