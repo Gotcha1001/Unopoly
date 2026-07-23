@@ -720,33 +720,34 @@
 //       />
 
 //       {/* ── Header ──────────────────────────────────────────────────────── */}
-//       <header className="relative z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-black/20 backdrop-blur-sm">
+//       <header className="relative z-10 flex items-center justify-between gap-2 px-2 sm:px-4 py-2 sm:py-3 border-b border-white/10 bg-black/20 backdrop-blur-sm">
 //         <button
-//           className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-all"
+//           className="flex items-center gap-1.5 text-xs px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-all shrink-0"
 //           onClick={() => router.push("/lobby")}
 //         >
-//           <ArrowLeft size={13} /> Lobby
+//           <ArrowLeft size={13} />{" "}
+//           <span className="hidden sm:inline">Lobby</span>
 //         </button>
-//         <div className="flex items-center gap-2">
-//           <span className="text-sm font-bold text-white tracking-wide">
+//         <div className="flex items-center gap-2 min-w-0">
+//           <span className="text-xs sm:text-sm font-bold text-white tracking-wide truncate max-w-[32vw] sm:max-w-none">
 //             {room.name}
 //           </span>
 //         </div>
-//         <div className="flex items-center gap-2">
+//         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
 //           <button
 //             onClick={toggleMute}
-//             className="p-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-all"
+//             className="p-1.5 sm:p-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-all"
 //           >
 //             {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
 //           </button>
-//           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-white/20 bg-black/30 text-xs font-semibold text-white/70">
+//           <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl border border-white/20 bg-black/30 text-xs font-semibold text-white/70">
 //             🃏 <span>{game.deck.length}</span>
 //           </div>
 //         </div>
 //       </header>
 
 //       {/* ── Video chat panel ──────────────────────────────────────────────── */}
-//       <div className="relative z-20 px-4 pt-2">
+//       <div className="relative z-20 px-2 sm:px-4 pt-2">
 //         <VideoLobby
 //           roomId={String(room._id)}
 //           userId={currentUserId}
@@ -757,7 +758,7 @@
 
 //       <div className="flex-1 flex flex-col relative z-10 overflow-hidden">
 //         {/* ── Opponents row ────────────────────────────────────────────────── */}
-//         <div className="flex justify-center gap-6 pt-4 pb-2 px-4 flex-wrap">
+//         <div className="flex justify-center gap-2 sm:gap-6 pt-3 sm:pt-4 pb-2 px-2 sm:px-4 flex-wrap">
 //           {opponents.map((opp) => {
 //             const isTheirTurn =
 //               game.playerOrder[game.currentPlayerIndex] === opp.userId;
@@ -860,7 +861,7 @@
 //         </div>
 
 //         {/* ── Center game area ──────────────────────────────────────────── */}
-//         <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-2">
+//         <div className="flex-1 flex flex-col items-center justify-center gap-3 sm:gap-4 px-2 sm:px-4 py-2 overflow-y-auto">
 //           <AnimatePresence mode="wait">
 //             <motion.div
 //               key={game.lastAction ?? "start"}
@@ -911,8 +912,8 @@
 //             </motion.div>
 //           </AnimatePresence>
 
-//           <div className="flex items-center gap-3">
-//             <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/30 border border-white/15 backdrop-blur-sm">
+//           <div className="flex items-center flex-wrap justify-center gap-2 sm:gap-3 px-2">
+//             <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-black/30 border border-white/15 backdrop-blur-sm">
 //               <span className="text-[10px] text-white/50 uppercase tracking-wider">
 //                 Color
 //               </span>
@@ -950,7 +951,7 @@
 //             )}
 //           </div>
 
-//           <div className="flex items-center gap-10">
+//           <div className="flex items-center flex-wrap justify-center gap-4 sm:gap-6 md:gap-10">
 //             {/* Draw pile */}
 //             <div className="flex flex-col items-center gap-2">
 //               <motion.div
@@ -1093,7 +1094,7 @@
 
 //         {/* ── Player's hand ─────────────────────────────────────────────────── */}
 //         <div
-//           className="relative border-t border-white/10 bg-black/40 backdrop-blur-md px-4 pt-3 pb-4 overflow-visible"
+//           className="relative border-t border-white/10 bg-black/40 backdrop-blur-md px-2 sm:px-4 pt-3 pb-4 overflow-visible"
 //           style={{ boxShadow: "0 -8px 32px rgba(0,0,0,0.5)" }}
 //         >
 //           <div className="flex items-center justify-between mb-3">
@@ -1164,7 +1165,7 @@
 //               })()}
 //           </AnimatePresence>
 
-//           <div className="flex flex-wrap justify-center gap-1.5 max-h-44 overflow-visible pt-3 pb-1">
+//           <div className="flex flex-wrap justify-center gap-1.5 max-h-[45vh] sm:max-h-44 overflow-visible pt-3 pb-1">
 //             {playerHand?.map((cardId, i) => {
 //               const playable =
 //                 isMyTurn &&
@@ -1229,7 +1230,7 @@
 //           )}
 
 //           {/* ── My Wallet & Properties --- cash + owned houses, below the hand ── */}
-//           <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap items-center justify-center gap-2">
+//           <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
 //             <div
 //               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold backdrop-blur-sm"
 //               style={{
@@ -1306,7 +1307,7 @@
 //             initial={{ opacity: 0 }}
 //             animate={{ opacity: 1 }}
 //             exit={{ opacity: 0 }}
-//             className="fixed inset-0 z-50 flex items-center justify-center"
+//             className="fixed inset-0 z-50 flex items-center justify-center px-4"
 //             style={{
 //               background: "rgba(0,0,0,0.75)",
 //               backdropFilter: "blur(8px)",
@@ -1337,7 +1338,7 @@
 //                     key={color}
 //                     whileHover={{ scale: 1.06, y: -2 }}
 //                     whileTap={{ scale: 0.94 }}
-//                     className="w-28 h-24 rounded-2xl capitalize font-black text-white text-lg relative overflow-hidden"
+//                     className="w-24 sm:w-28 h-20 sm:h-24 rounded-2xl capitalize font-black text-white text-lg relative overflow-hidden"
 //                     style={{
 //                       background:
 //                         color === "red"
@@ -1375,7 +1376,7 @@
 //             initial={{ opacity: 0 }}
 //             animate={{ opacity: 1 }}
 //             exit={{ opacity: 0 }}
-//             className="fixed inset-0 z-50 flex items-center justify-center"
+//             className="fixed inset-0 z-50 flex items-center justify-center px-4"
 //             style={{
 //               background: "rgba(0,0,0,0.75)",
 //               backdropFilter: "blur(8px)",
@@ -1580,7 +1581,7 @@
 //                 initial={{ opacity: 0 }}
 //                 animate={{ opacity: 1 }}
 //                 exit={{ opacity: 0 }}
-//                 className="fixed inset-0 z-50 flex items-center justify-center"
+//                 className="fixed inset-0 z-50 flex items-center justify-center px-4"
 //                 style={{
 //                   background: "rgba(0,0,0,0.75)",
 //                   backdropFilter: "blur(8px)",
@@ -1663,7 +1664,7 @@
 //                 initial={{ opacity: 0 }}
 //                 animate={{ opacity: 1 }}
 //                 exit={{ opacity: 0 }}
-//                 className="fixed inset-0 z-50 flex items-center justify-center"
+//                 className="fixed inset-0 z-50 flex items-center justify-center px-4"
 //                 style={{
 //                   background: "rgba(0,0,0,0.8)",
 //                   backdropFilter: "blur(8px)",
@@ -1739,7 +1740,7 @@
 //             initial={{ opacity: 0 }}
 //             animate={{ opacity: 1 }}
 //             exit={{ opacity: 0 }}
-//             className="fixed inset-0 z-50 flex items-center justify-center"
+//             className="fixed inset-0 z-50 flex items-center justify-center px-4"
 //             style={{
 //               background: "rgba(0,0,0,0.75)",
 //               backdropFilter: "blur(8px)",
@@ -1857,6 +1858,8 @@ import { VideoLobby } from "./Videolobby";
 import { PaydayTracker } from "./PaydayTracker";
 import { AnimatedCash } from "./Animatedcash";
 import { ConfettiBurst } from "./Confetti";
+import { PropertyIcon } from "./PropertyIcon";
+import { PropertyMediaHeader } from "./PropertyMediaHeader";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -3002,7 +3005,7 @@ export function GameBoard({
               })()}
           </AnimatePresence>
 
-          <div className="flex flex-wrap justify-center gap-1.5 max-h-[45vh] sm:max-h-44 overflow-visible pt-3 pb-1">
+          <div className="flex flex-wrap justify-center gap-1.5 overflow-visible pt-3 pb-1">
             {playerHand?.map((cardId, i) => {
               const playable =
                 isMyTurn &&
@@ -3095,10 +3098,10 @@ export function GameBoard({
                 <button
                   key={prop.instanceId}
                   onClick={() => setSelectedPropertyId(prop.instanceId)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
+                  className="flex items-center gap-1 px-2 py-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
                   title={`Bought for $${prop.price.toLocaleString()} · click to view & upgrade`}
                 >
-                  🏠 {prop.name}{" "}
+                  <PropertyIcon propertyId={prop.id} /> {prop.name}{" "}
                   <span className="text-emerald-300/70">
                     ${prop.value.toLocaleString()}
                   </span>
@@ -3232,7 +3235,7 @@ export function GameBoard({
                   "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(45,212,191,0.3)",
               }}
             >
-              <div className="text-5xl mb-2">🏠</div>
+              <PropertyMediaHeader propertyId={myPendingProperty.id} />
               {myPendingPropertyQueueLength > 1 && (
                 <p className="text-[10px] uppercase tracking-widest text-emerald-300/60 mb-1">
                   Offer 1 of {myPendingPropertyQueueLength}
@@ -3305,7 +3308,7 @@ export function GameBoard({
                   "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(45,212,191,0.3)",
               }}
             >
-              <div className="text-5xl mb-2">🏠</div>
+              <PropertyMediaHeader propertyId={selectedProperty.id} />
               <h3 className="font-black text-2xl mb-1 text-white tracking-tight">
                 {selectedProperty.name}
               </h3>
