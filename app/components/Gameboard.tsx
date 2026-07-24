@@ -20,6 +20,8 @@
 // import { PaydayTracker } from "./PaydayTracker";
 // import { AnimatedCash } from "./Animatedcash";
 // import { ConfettiBurst } from "./Confetti";
+// import { PropertyIcon } from "./PropertyIcon";
+// import { PropertyMediaHeader } from "./PropertyMediaHeader";
 
 // // ─── Interfaces ───────────────────────────────────────────────────────
 // interface Room {
@@ -292,6 +294,12 @@
 //   const myProperties = myPlayer?.properties ?? [];
 //   const myPendingProperty = myPlayer?.pendingProperties?.[0];
 //   const myPendingPropertyQueueLength = myPlayer?.pendingProperties?.length ?? 0;
+//   // ── NEW: whether the current pending property offer is affordable ──────
+//   // Drives both the disabled/relabeled "Buy House" button and the inline
+//   // warning text in the property offer modal below.
+//   const canAffordProperty = myPendingProperty
+//     ? myMoney >= myPendingProperty.price
+//     : true;
 //   const myPendingLifeEvents = myPlayer?.pendingLifeEvents ?? [];
 //   // ─── Gamble stack additions ─────────────────────────────────────────
 //   const myPendingGambleEvent = myPlayer?.pendingGambleEvent;
@@ -581,6 +589,21 @@
 //   // ── Property offer response ─────────────────────────────────────────────
 //   const handlePropertyResponse = async (accept: boolean) => {
 //     if (respondingProperty) return;
+
+//     // ── NEW: check affordability client-side before ever calling the
+//     // mutation. This is what fixes the "click Buy House and nothing seems
+//     // to happen" feeling --- previously the only affordability check was
+//     // in the server mutation, so the button would still submit and the
+//     // toast only appeared after a full round-trip. Now it's instant, and
+//     // the button itself is disabled/relabeled below so this branch should
+//     // rarely even fire --- it's a safety net for stale-money edge cases.
+//     if (accept && myPendingProperty && myMoney < myPendingProperty.price) {
+//       toast.error(
+//         `Sorry, you can't afford ${myPendingProperty.name} yet — you need $${myPendingProperty.price.toLocaleString()} but only have $${myMoney.toLocaleString()}. Earn some more first!`,
+//       );
+//       return;
+//     }
+
 //     setRespondingProperty(true);
 //     play("buttonClick");
 //     try {
@@ -1165,7 +1188,7 @@
 //               })()}
 //           </AnimatePresence>
 
-//           <div className="flex flex-wrap justify-center gap-1.5 max-h-[45vh] sm:max-h-44 overflow-visible pt-3 pb-1">
+//           <div className="flex flex-wrap justify-center gap-1.5 overflow-visible pt-3 pb-1">
 //             {playerHand?.map((cardId, i) => {
 //               const playable =
 //                 isMyTurn &&
@@ -1229,73 +1252,88 @@
 //             </motion.p>
 //           )}
 
-//           {/* ── My Wallet & Properties --- cash + owned houses, below the hand ── */}
-//           <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
-//             <div
-//               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold backdrop-blur-sm"
-//               style={{
-//                 borderColor:
-//                   richestUserId === currentUserId
-//                     ? "#facc15"
-//                     : "rgba(255,255,255,0.2)",
-//                 background:
-//                   richestUserId === currentUserId
-//                     ? "rgba(250,204,21,0.15)"
-//                     : "rgba(0,0,0,0.3)",
-//                 color: richestUserId === currentUserId ? "#fde68a" : "white",
-//               }}
-//               title="Your cash"
-//             >
-//               {richestUserId === currentUserId ? "👑" : "💰"}{" "}
-//               <AnimatedCash value={myMoney} />
-//             </div>
-//             {myProperties.length === 0 ? (
-//               <span className="text-[11px] text-white/30 italic px-1">
-//                 No properties yet
-//               </span>
-//             ) : (
-//               myProperties.map((prop) => (
-//                 <button
-//                   key={prop.instanceId}
-//                   onClick={() => setSelectedPropertyId(prop.instanceId)}
-//                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
-//                   title={`Bought for $${prop.price.toLocaleString()} · click to view & upgrade`}
-//                 >
-//                   🏠 {prop.name}{" "}
-//                   <span className="text-emerald-300/70">
-//                     ${prop.value.toLocaleString()}
-//                   </span>
-//                   {prop.upgrades.length > 0 && (
-//                     <span className="text-emerald-300/50">
-//                       +{prop.upgrades.length}
-//                     </span>
-//                   )}
-//                 </button>
-//               ))
-//             )}
-//             {myPropertyValue > 0 && (
-//               <div className="px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/5 text-[11px] font-semibold text-white/60">
-//                 Total wealth: <AnimatedCash value={myMoney + myPropertyValue} />
-//               </div>
-//             )}
-//             {/* ─── Rent additions ────────────────────────────────────────────
-//                 2+ properties start earning rent (17% of combined purchase
-//                 price) every payday, on top of salary. Shown only once it
-//                 actually applies --- everything else here is unchanged. */}
-//             {myProperties.length > 1 && (
+//           {/* ── My Wallet & Properties --- cash + owned houses, below the hand ──
+//               Fixed order: cash → total wealth → rent always sit together on
+//               row 1 (they're compact, so this stays on one line on desktop
+//               too). Properties get their own row 2 so they can wrap to full
+//               width on narrow/mobile screens instead of being squeezed by
+//               the wallet badges. ─────────────────────────────────────────── */}
+//           <div className="mt-4 pt-3 border-t border-white/10 flex flex-col items-center gap-1.5 sm:gap-2">
+//             {/* Row 1: cash, total wealth, rent --- always in this order */}
+//             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
 //               <div
-//                 className="px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-[11px] font-semibold text-emerald-200"
-//                 title="17% of your properties' combined purchase price, paid out every payday"
+//                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold backdrop-blur-sm"
+//                 style={{
+//                   borderColor:
+//                     richestUserId === currentUserId
+//                       ? "#facc15"
+//                       : "rgba(255,255,255,0.2)",
+//                   background:
+//                     richestUserId === currentUserId
+//                       ? "rgba(250,204,21,0.15)"
+//                       : "rgba(0,0,0,0.3)",
+//                   color: richestUserId === currentUserId ? "#fde68a" : "white",
+//                 }}
+//                 title="Your cash"
 //               >
-//                 🏠💰 Earning{" "}
-//                 <AnimatedCash
-//                   value={Math.round(
-//                     myProperties.reduce((s, pr) => s + pr.price, 0) * 0.17,
-//                   )}
-//                   suffix="/wk rent"
-//                 />
+//                 {richestUserId === currentUserId ? "👑" : "💰"}{" "}
+//                 <AnimatedCash value={myMoney} />
 //               </div>
-//             )}
+
+//               {myPropertyValue > 0 && (
+//                 <div className="px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/5 text-[11px] font-semibold text-white/60">
+//                   Total wealth:{" "}
+//                   <AnimatedCash value={myMoney + myPropertyValue} />
+//                 </div>
+//               )}
+
+//               {/* ─── Rent additions ────────────────────────────────────────────
+//                   2+ properties start earning rent (17% of combined purchase
+//                   price) every payday, on top of salary. Shown only once it
+//                   actually applies --- everything else here is unchanged. */}
+//               {myProperties.length > 1 && (
+//                 <div
+//                   className="px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-[11px] font-semibold text-emerald-200"
+//                   title="17% of your properties' combined purchase price, paid out every payday"
+//                 >
+//                   🏠💰 Earning{" "}
+//                   <AnimatedCash
+//                     value={Math.round(
+//                       myProperties.reduce((s, pr) => s + pr.price, 0) * 0.17,
+//                     )}
+//                     suffix="/wk rent"
+//                   />
+//                 </div>
+//               )}
+//             </div>
+
+//             {/* Row 2: properties --- own row so they get full width on mobile */}
+//             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 w-full">
+//               {myProperties.length === 0 ? (
+//                 <span className="text-[11px] text-white/30 italic px-1">
+//                   No properties yet
+//                 </span>
+//               ) : (
+//                 myProperties.map((prop) => (
+//                   <button
+//                     key={prop.instanceId}
+//                     onClick={() => setSelectedPropertyId(prop.instanceId)}
+//                     className="flex items-center gap-1 px-2 py-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
+//                     title={`Bought for $${prop.price.toLocaleString()} · click to view & upgrade`}
+//                   >
+//                     <PropertyIcon propertyId={prop.id} /> {prop.name}{" "}
+//                     <span className="text-emerald-300/70">
+//                       ${prop.value.toLocaleString()}
+//                     </span>
+//                     {prop.upgrades.length > 0 && (
+//                       <span className="text-emerald-300/50">
+//                         +{prop.upgrades.length}
+//                       </span>
+//                     )}
+//                   </button>
+//                 ))
+//               )}
+//             </div>
 //           </div>
 //         </div>
 //       </div>
@@ -1395,7 +1433,7 @@
 //                   "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(45,212,191,0.3)",
 //               }}
 //             >
-//               <div className="text-5xl mb-2">🏠</div>
+//               <PropertyMediaHeader propertyId={myPendingProperty.id} />
 //               {myPendingPropertyQueueLength > 1 && (
 //                 <p className="text-[10px] uppercase tracking-widest text-emerald-300/60 mb-1">
 //                   Offer 1 of {myPendingPropertyQueueLength}
@@ -1412,18 +1450,25 @@
 //                 total wealth if you buy it. You have ${myMoney.toLocaleString()}{" "}
 //                 cash.
 //               </p>
+//               {/* ── NEW: inline affordability warning, mirrors the upgrade modal ── */}
+//               {!canAffordProperty && (
+//                 <p className="text-red-300 text-xs font-semibold mb-4">
+//                   😕 Sorry, you can&apos;t afford this yet — you need $
+//                   {(myPendingProperty.price - myMoney).toLocaleString()} more.
+//                 </p>
+//               )}
 //               <div className="flex gap-3 justify-center">
 //                 <motion.button
-//                   whileHover={{ scale: 1.05 }}
-//                   whileTap={{ scale: 0.95 }}
-//                   disabled={respondingProperty}
-//                   className="px-5 py-2.5 rounded-xl font-bold text-white disabled:opacity-50"
+//                   whileHover={canAffordProperty ? { scale: 1.05 } : undefined}
+//                   whileTap={canAffordProperty ? { scale: 0.95 } : undefined}
+//                   disabled={respondingProperty || !canAffordProperty}
+//                   className="px-5 py-2.5 rounded-xl font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
 //                   style={{
 //                     background: "linear-gradient(145deg, #2dd4bf, #0f766e)",
 //                   }}
 //                   onClick={() => handlePropertyResponse(true)}
 //                 >
-//                   Buy House
+//                   {canAffordProperty ? "Buy House" : "Can't Afford"}
 //                 </motion.button>
 //                 <motion.button
 //                   whileHover={{ scale: 1.05 }}
@@ -1468,7 +1513,7 @@
 //                   "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(45,212,191,0.3)",
 //               }}
 //             >
-//               <div className="text-5xl mb-2">🏠</div>
+//               <PropertyMediaHeader propertyId={selectedProperty.id} />
 //               <h3 className="font-black text-2xl mb-1 text-white tracking-tight">
 //                 {selectedProperty.name}
 //               </h3>
@@ -1860,6 +1905,8 @@ import { AnimatedCash } from "./Animatedcash";
 import { ConfettiBurst } from "./Confetti";
 import { PropertyIcon } from "./PropertyIcon";
 import { PropertyMediaHeader } from "./PropertyMediaHeader";
+import { CardEffectHeader } from "./Cardeffectheader";
+import { UpgradeMediaHeader } from "./Upgrademediaheader";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -2132,6 +2179,12 @@ export function GameBoard({
   const myProperties = myPlayer?.properties ?? [];
   const myPendingProperty = myPlayer?.pendingProperties?.[0];
   const myPendingPropertyQueueLength = myPlayer?.pendingProperties?.length ?? 0;
+  // ── NEW: whether the current pending property offer is affordable ──────
+  // Drives both the disabled/relabeled "Buy House" button and the inline
+  // warning text in the property offer modal below.
+  const canAffordProperty = myPendingProperty
+    ? myMoney >= myPendingProperty.price
+    : true;
   const myPendingLifeEvents = myPlayer?.pendingLifeEvents ?? [];
   // ─── Gamble stack additions ─────────────────────────────────────────
   const myPendingGambleEvent = myPlayer?.pendingGambleEvent;
@@ -2421,6 +2474,21 @@ export function GameBoard({
   // ── Property offer response ─────────────────────────────────────────────
   const handlePropertyResponse = async (accept: boolean) => {
     if (respondingProperty) return;
+
+    // ── NEW: check affordability client-side before ever calling the
+    // mutation. This is what fixes the "click Buy House and nothing seems
+    // to happen" feeling --- previously the only affordability check was
+    // in the server mutation, so the button would still submit and the
+    // toast only appeared after a full round-trip. Now it's instant, and
+    // the button itself is disabled/relabeled below so this branch should
+    // rarely even fire --- it's a safety net for stale-money edge cases.
+    if (accept && myPendingProperty && myMoney < myPendingProperty.price) {
+      toast.error(
+        `Sorry, you can't afford ${myPendingProperty.name} yet — you need $${myPendingProperty.price.toLocaleString()} but only have $${myMoney.toLocaleString()}. Earn some more first!`,
+      );
+      return;
+    }
+
     setRespondingProperty(true);
     play("buttonClick");
     try {
@@ -3069,73 +3137,88 @@ export function GameBoard({
             </motion.p>
           )}
 
-          {/* ── My Wallet & Properties --- cash + owned houses, below the hand ── */}
-          <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
-            <div
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold backdrop-blur-sm"
-              style={{
-                borderColor:
-                  richestUserId === currentUserId
-                    ? "#facc15"
-                    : "rgba(255,255,255,0.2)",
-                background:
-                  richestUserId === currentUserId
-                    ? "rgba(250,204,21,0.15)"
-                    : "rgba(0,0,0,0.3)",
-                color: richestUserId === currentUserId ? "#fde68a" : "white",
-              }}
-              title="Your cash"
-            >
-              {richestUserId === currentUserId ? "👑" : "💰"}{" "}
-              <AnimatedCash value={myMoney} />
-            </div>
-            {myProperties.length === 0 ? (
-              <span className="text-[11px] text-white/30 italic px-1">
-                No properties yet
-              </span>
-            ) : (
-              myProperties.map((prop) => (
-                <button
-                  key={prop.instanceId}
-                  onClick={() => setSelectedPropertyId(prop.instanceId)}
-                  className="flex items-center gap-1 px-2 py-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
-                  title={`Bought for $${prop.price.toLocaleString()} · click to view & upgrade`}
-                >
-                  <PropertyIcon propertyId={prop.id} /> {prop.name}{" "}
-                  <span className="text-emerald-300/70">
-                    ${prop.value.toLocaleString()}
-                  </span>
-                  {prop.upgrades.length > 0 && (
-                    <span className="text-emerald-300/50">
-                      +{prop.upgrades.length}
-                    </span>
-                  )}
-                </button>
-              ))
-            )}
-            {myPropertyValue > 0 && (
-              <div className="px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/5 text-[11px] font-semibold text-white/60">
-                Total wealth: <AnimatedCash value={myMoney + myPropertyValue} />
-              </div>
-            )}
-            {/* ─── Rent additions ────────────────────────────────────────────
-                2+ properties start earning rent (17% of combined purchase
-                price) every payday, on top of salary. Shown only once it
-                actually applies --- everything else here is unchanged. */}
-            {myProperties.length > 1 && (
+          {/* ── My Wallet & Properties --- cash + owned houses, below the hand ──
+              Fixed order: cash → total wealth → rent always sit together on
+              row 1 (they're compact, so this stays on one line on desktop
+              too). Properties get their own row 2 so they can wrap to full
+              width on narrow/mobile screens instead of being squeezed by
+              the wallet badges. ─────────────────────────────────────────── */}
+          <div className="mt-4 pt-3 border-t border-white/10 flex flex-col items-center gap-1.5 sm:gap-2">
+            {/* Row 1: cash, total wealth, rent --- always in this order */}
+            <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
               <div
-                className="px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-[11px] font-semibold text-emerald-200"
-                title="17% of your properties' combined purchase price, paid out every payday"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold backdrop-blur-sm"
+                style={{
+                  borderColor:
+                    richestUserId === currentUserId
+                      ? "#facc15"
+                      : "rgba(255,255,255,0.2)",
+                  background:
+                    richestUserId === currentUserId
+                      ? "rgba(250,204,21,0.15)"
+                      : "rgba(0,0,0,0.3)",
+                  color: richestUserId === currentUserId ? "#fde68a" : "white",
+                }}
+                title="Your cash"
               >
-                🏠💰 Earning{" "}
-                <AnimatedCash
-                  value={Math.round(
-                    myProperties.reduce((s, pr) => s + pr.price, 0) * 0.17,
-                  )}
-                  suffix="/wk rent"
-                />
+                {richestUserId === currentUserId ? "👑" : "💰"}{" "}
+                <AnimatedCash value={myMoney} />
               </div>
-            )}
+
+              {myPropertyValue > 0 && (
+                <div className="px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/5 text-[11px] font-semibold text-white/60">
+                  Total wealth:{" "}
+                  <AnimatedCash value={myMoney + myPropertyValue} />
+                </div>
+              )}
+
+              {/* ─── Rent additions ────────────────────────────────────────────
+                  2+ properties start earning rent (17% of combined purchase
+                  price) every payday, on top of salary. Shown only once it
+                  actually applies --- everything else here is unchanged. */}
+              {myProperties.length > 1 && (
+                <div
+                  className="px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-[11px] font-semibold text-emerald-200"
+                  title="17% of your properties' combined purchase price, paid out every payday"
+                >
+                  🏠💰 Earning{" "}
+                  <AnimatedCash
+                    value={Math.round(
+                      myProperties.reduce((s, pr) => s + pr.price, 0) * 0.17,
+                    )}
+                    suffix="/wk rent"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Row 2: properties --- own row so they get full width on mobile */}
+            <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 w-full">
+              {myProperties.length === 0 ? (
+                <span className="text-[11px] text-white/30 italic px-1">
+                  No properties yet
+                </span>
+              ) : (
+                myProperties.map((prop) => (
+                  <button
+                    key={prop.instanceId}
+                    onClick={() => setSelectedPropertyId(prop.instanceId)}
+                    className="flex items-center gap-1 px-2 py-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 text-[11px] font-semibold hover:bg-emerald-400/20 hover:border-emerald-400/50 transition-all cursor-pointer"
+                    title={`Bought for $${prop.price.toLocaleString()} · click to view & upgrade`}
+                  >
+                    <PropertyIcon propertyId={prop.id} /> {prop.name}{" "}
+                    <span className="text-emerald-300/70">
+                      ${prop.value.toLocaleString()}
+                    </span>
+                    {prop.upgrades.length > 0 && (
+                      <span className="text-emerald-300/50">
+                        +{prop.upgrades.length}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -3252,18 +3335,25 @@ export function GameBoard({
                 total wealth if you buy it. You have ${myMoney.toLocaleString()}{" "}
                 cash.
               </p>
+              {/* ── NEW: inline affordability warning, mirrors the upgrade modal ── */}
+              {!canAffordProperty && (
+                <p className="text-red-300 text-xs font-semibold mb-4">
+                  😕 Sorry, you can&apos;t afford this yet — you need $
+                  {(myPendingProperty.price - myMoney).toLocaleString()} more.
+                </p>
+              )}
               <div className="flex gap-3 justify-center">
                 <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  disabled={respondingProperty}
-                  className="px-5 py-2.5 rounded-xl font-bold text-white disabled:opacity-50"
+                  whileHover={canAffordProperty ? { scale: 1.05 } : undefined}
+                  whileTap={canAffordProperty ? { scale: 0.95 } : undefined}
+                  disabled={respondingProperty || !canAffordProperty}
+                  className="px-5 py-2.5 rounded-xl font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     background: "linear-gradient(145deg, #2dd4bf, #0f766e)",
                   }}
                   onClick={() => handlePropertyResponse(true)}
                 >
-                  Buy House
+                  {canAffordProperty ? "Buy House" : "Can't Afford"}
                 </motion.button>
                 <motion.button
                   whileHover={{ scale: 1.05 }}
@@ -3356,6 +3446,7 @@ export function GameBoard({
                 const canAfford = myMoney >= cost;
                 return (
                   <div className="mb-2 p-4 rounded-2xl border border-white/10 bg-black/20 text-left">
+                    <UpgradeMediaHeader upgradeId={nextUpgrade.id} />
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xl">{nextUpgrade.emoji}</span>
                       <span className="font-bold text-white text-sm">
@@ -3442,7 +3533,9 @@ export function GameBoard({
                       : "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(239,68,68,0.3)",
                   }}
                 >
-                  <div className="text-5xl mb-2">{isGain ? "💰" : "💸"}</div>
+                  <CardEffectHeader
+                    variant={isGain ? "life-gain" : "life-loss"}
+                  />
                   <h3 className="font-black text-2xl mb-3 text-white tracking-tight">
                     {isGain
                       ? `You got $${totalDelta.toLocaleString()}!`
@@ -3533,17 +3626,17 @@ export function GameBoard({
                           : "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(239,68,68,0.3)",
                   }}
                 >
-                  <motion.div
-                    className="text-5xl mb-2"
-                    animate={
-                      g.wipeOut || g.jackpot
-                        ? { rotate: [0, -8, 8, -8, 0], scale: [1, 1.1, 1] }
-                        : {}
+                  <CardEffectHeader
+                    variant={
+                      g.wipeOut
+                        ? "gamble-wipeout"
+                        : g.jackpot
+                          ? "gamble-jackpot"
+                          : isGain
+                            ? "gamble-gain"
+                            : "gamble-loss"
                     }
-                    transition={{ duration: 0.6 }}
-                  >
-                    {g.wipeOut ? "💥" : g.jackpot ? "🎰" : isGain ? "🎲" : "🎲"}
-                  </motion.div>
+                  />
                   <p className="text-[10px] uppercase tracking-widest text-white/40 mb-1">
                     Gamble Stack --- {g.label}
                   </p>

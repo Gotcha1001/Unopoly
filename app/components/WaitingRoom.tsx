@@ -252,6 +252,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useEffect, useRef } from "react";
 import { useSoundManager } from "@/hooks/useSoundManager"; // ← adjust path
+import { PropertyVideoPreloader } from "./Propertyvideopreloader";
 
 interface Room {
   _id: Id<"rooms">;
@@ -350,6 +351,7 @@ export function WaitingRoom({ room, players, currentUserId }: Props) {
 
   return (
     <div className="max-w-md mx-auto py-8 px-4">
+      <PropertyVideoPreloader />
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-black dark:text-white">
