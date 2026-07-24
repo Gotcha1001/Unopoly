@@ -664,14 +664,15 @@ export const respondProperty = mutation({
       .first();
 
     if (accept) {
+      // ── CHANGED: throw instead of silently auto-declining. Leaving the
+      // offer in the queue (no patch happens here) means the modal stays
+      // open --- the player can decline it themselves, or just close the
+      // toast and wait for more cash before accepting later. Throwing is
+      // what lets the client's catch block actually fire a toast.
       if ((player.money ?? 0) < offer.price) {
-        await ctx.db.patch(player._id, { pendingProperties: restQueue });
-        if (game) {
-          await ctx.db.patch(game._id, {
-            lastAction: `${player.name} couldn't afford ${offer.name} ($${offer.price.toLocaleString()}) and had to pass.`,
-          });
-        }
-        return;
+        throw new Error(
+          `Sorry, you don't have enough money for ${offer.name} --- you need $${offer.price.toLocaleString()} but only have $${(player.money ?? 0).toLocaleString()}. Earn some more first!`,
+        );
       }
 
       await ctx.db.patch(player._id, {
