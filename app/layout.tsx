@@ -71,6 +71,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import Provider from "./provider";
 import { AppSidebar } from "./components/Appsidebar";
 import { BackgroundProvider } from "./context/BackgroundContext";
+import { PropertyVideoPreloader } from "./components/Propertyvideopreloader";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({
@@ -98,6 +99,7 @@ export default function RootLayout({
             <ConvexClientProvider>
               <Provider>
                 <BackgroundProvider>
+                  <PropertyVideoPreloader />
                   <SidebarProvider>
                     <div className="flex min-h-screen w-full flex-col">
                       <Navbar />
