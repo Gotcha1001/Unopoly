@@ -24,6 +24,7 @@ import { PropertyIcon } from "./PropertyIcon";
 import { PropertyMediaHeader } from "./PropertyMediaHeader";
 import { CardEffectHeader } from "./Cardeffectheader";
 import { UpgradeMediaHeader } from "./Upgrademediaheader";
+import { TradeModal, TradeInbox } from "./Tradepanel";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -186,6 +187,17 @@ function wealthOf(p: Pick<Player, "money" | "properties">) {
   );
 }
 
+// ─── Rent additions ─────────────────────────────────────────────────────
+// Same 17%-of-combined-purchase-price rule used for the current player's
+// own "Earning $X/wk rent" badge --- pulled out into a shared helper so the
+// opponent chips can show the exact same number instead of re-deriving it.
+// Only meaningful once 2+ properties are owned (mirrors the server rule).
+function weeklyRentOf(p: Pick<Player, "properties">) {
+  const props = p.properties ?? [];
+  if (props.length < 2) return 0;
+  return Math.round(props.reduce((s, pr) => s + pr.price, 0) * 0.17);
+}
+
 const COLOR_OPTIONS = ["red", "blue", "green", "yellow"] as const;
 
 const COLOR_HEX: Record<string, string> = {
@@ -281,6 +293,10 @@ export function GameBoard({
   const isMyTurn = currentPlayerId === currentUserId;
   const topCard = game.discardPile[game.discardPile.length - 1];
   const opponents = players.filter((p) => p.userId !== currentUserId);
+
+  const [tradeTargetId, setTradeTargetId] = useState<string | null>(null);
+  const tradeTarget = opponents.find((p) => p.userId === tradeTargetId) ?? null;
+
   const currentPlayerName =
     players.find((p) => p.userId === currentPlayerId)?.name ?? "Unknown";
   const currentGlow = COLOR_GLOW[game.currentColor] ?? "rgba(147,51,234,0.5)";
@@ -788,6 +804,13 @@ export function GameBoard({
             const isTheirTurn =
               game.playerOrder[game.currentPlayerIndex] === opp.userId;
             const oppHand = opp.hand ?? [];
+            // ── NEW: opponent wealth + rent, mirrors the player's own
+            // "Total wealth" and "Earning $X/wk rent" badges further down,
+            // so it's obvious *why* an opponent isn't beatable yet instead
+            // of just seeing a property count. ─────────────────────────
+            const oppProperties = opp.properties ?? [];
+            const oppWealth = wealthOf(opp);
+            const oppWeeklyRent = weeklyRentOf(opp);
             return (
               <motion.div
                 key={opp.userId}
@@ -799,7 +822,7 @@ export function GameBoard({
                 }}
               >
                 <motion.div
-                  className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 border backdrop-blur-sm"
+                  className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 border backdrop-blur-sm flex-wrap justify-center"
                   animate={
                     isTheirTurn
                       ? {
@@ -843,15 +866,48 @@ export function GameBoard({
                     💰
                     <AnimatedCash value={opp.money ?? 0} />
                   </span>
-                  {(opp.properties ?? []).length > 0 && (
+                  {oppProperties.length > 0 && (
                     <span
                       className="px-1.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 font-bold text-[10px]"
-                      title={(opp.properties ?? [])
-                        .map((p) => p.name)
-                        .join(", ")}
+                      title={oppProperties.map((p) => p.name).join(", ")}
                     >
-                      🏠{(opp.properties ?? []).length}
+                      🏠{oppProperties.length}
                     </span>
+                  )}
+                  {/* ── NEW: total wealth badge --- cash + everything their
+                      properties are worth, the same number the "Not the
+                      richest yet" warning compares you against. Only shown
+                      once they actually own something, so it doesn't just
+                      duplicate the cash badge for a property-less opponent. */}
+                  {oppProperties.length > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded-full bg-white/15 text-white/90 font-bold text-[10px]"
+                      title="Total wealth --- cash + property value"
+                    >
+                      💎 <AnimatedCash value={oppWealth} />
+                    </span>
+                  )}
+                  {/* ── NEW: weekly rent badge --- same 17%-of-purchase-price
+                      rule as the player's own rent badge, only once they own
+                      2+ properties. Explains why their wealth keeps growing
+                      every payday even if you never see them buy anything
+                      new. ──────────────────────────────────────────────── */}
+                  {oppWeeklyRent > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded-full bg-emerald-400/10 text-emerald-200 font-bold text-[10px]"
+                      title="17% of their properties' combined purchase price, paid out every payday"
+                    >
+                      🏠💰 <AnimatedCash value={oppWeeklyRent} suffix="/wk" />
+                    </span>
+                  )}
+                  {!opp.isBot && (
+                    <button
+                      onClick={() => setTradeTargetId(opp.userId)}
+                      title={`Propose a trade with ${opp.name}`}
+                      className="px-1.5 py-0.5 rounded-full bg-purple-400/20 text-purple-200 font-bold text-[10px] hover:bg-purple-400/40 transition"
+                    >
+                      🤝 Trade
+                    </button>
                   )}
                 </motion.div>
                 <div className="flex items-end" style={{ height: "3.6rem" }}>
@@ -1882,6 +1938,26 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <TradeInbox roomId={room._id} userId={currentUserId} />
+      {tradeTarget && myPlayer && (
+        <TradeModal
+          roomId={room._id}
+          me={{
+            userId: myPlayer.userId,
+            name: myPlayer.name,
+            money: myPlayer.money ?? 0,
+            properties: myPlayer.properties ?? [],
+          }}
+          opponent={{
+            userId: tradeTarget.userId,
+            name: tradeTarget.name,
+            money: tradeTarget.money ?? 0,
+            properties: tradeTarget.properties ?? [],
+          }}
+          onClose={() => setTradeTargetId(null)}
+        />
+      )}
     </div>
   );
 }
