@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { GAMBLE_EVENTS, gambleDef } from "../lib/Gambleevents";
 import { LIFE_EVENTS } from "@/lib/LifeEvents";
@@ -331,6 +331,146 @@ export function canPlayCard(
 function isStackableDrawCard(cardId: string): boolean {
   const { value } = parseCard(cardId);
   return value === "draw2" || cardId === "wild_draw4";
+}
+
+// ─── Bot trading ────────────────────────────────────────────────────────
+// Runs once per bot turn, before the bot decides what to play. Two jobs:
+//   1. Respond to any trades other players have sent to this bot --- accept
+//      only if the deal nets the bot a modest premium, decline otherwise.
+//   2. Occasionally propose a new trade of its own, offering cash for the
+//      priciest property an opponent owns.
+async function resolveBotTradeOffers(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  bot: Doc<"players">,
+): Promise<{ money: number; properties: BotProperty[]; label: string | null }> {
+  let money = bot.money ?? 0;
+  let properties: BotProperty[] = bot.properties ?? [];
+  let label: string | null = null;
+
+  const incoming = await ctx.db
+    .query("trades")
+    .withIndex("by_to_user", (q) => q.eq("toUserId", bot.userId))
+    .collect();
+
+  for (const trade of incoming) {
+    if (trade.roomId !== roomId || trade.status !== "pending") continue;
+
+    const fromPlayer = await ctx.db
+      .query("players")
+      .withIndex("by_user_room", (q) =>
+        q.eq("userId", trade.fromUserId).eq("roomId", roomId),
+      )
+      .first();
+    if (!fromPlayer) continue;
+
+    const offeredProps = (fromPlayer.properties ?? []).filter((p) =>
+      trade.offerPropertyIds.includes(p.instanceId),
+    );
+    const requestedProps = properties.filter((p) =>
+      trade.requestPropertyIds.includes(p.instanceId),
+    );
+    // Ownership may have shifted since the offer went out --- skip if either
+    // side no longer actually holds what the trade references.
+    if (
+      offeredProps.length !== trade.offerPropertyIds.length ||
+      requestedProps.length !== trade.requestPropertyIds.length
+    ) {
+      continue;
+    }
+
+    const gain =
+      trade.offerCash + offeredProps.reduce((s, p) => s + p.value, 0);
+    const cost =
+      trade.requestCash + requestedProps.reduce((s, p) => s + p.value, 0);
+    const canAfford = trade.requestCash <= money;
+    // Bots only accept trades that net them a modest premium --- keeps them
+    // from getting fleeced by lopsided offers.
+    const accept = canAfford && gain >= cost * 1.05;
+
+    await ctx.db.patch(trade._id, {
+      status: accept ? "accepted" : "declined",
+      resolvedAt: Date.now(),
+    });
+
+    if (accept) {
+      properties = [
+        ...properties.filter(
+          (p) => !trade.requestPropertyIds.includes(p.instanceId),
+        ),
+        ...offeredProps,
+      ];
+      money = money - trade.requestCash + trade.offerCash;
+      await ctx.db.patch(fromPlayer._id, {
+        money: (fromPlayer.money ?? 0) - trade.offerCash + trade.requestCash,
+        properties: [
+          ...(fromPlayer.properties ?? []).filter(
+            (p) => !trade.offerPropertyIds.includes(p.instanceId),
+          ),
+          ...requestedProps,
+        ],
+      });
+      label = `🤝 ${bot.name} accepted ${trade.fromName}'s trade offer`;
+    }
+  }
+
+  return { money, properties, label };
+}
+
+async function maybeProposeBotTrade(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  bot: Doc<"players">,
+  money: number,
+  difficulty: BotDifficulty,
+): Promise<string | null> {
+  if (Math.random() > 0.25) return null; // don't spam an offer every turn
+
+  const existingOutgoing = await ctx.db
+    .query("trades")
+    .withIndex("by_from_user", (q) => q.eq("fromUserId", bot.userId))
+    .collect();
+  if (
+    existingOutgoing.some((t) => t.roomId === roomId && t.status === "pending")
+  ) {
+    return null;
+  }
+
+  const others = (
+    await ctx.db
+      .query("players")
+      .withIndex("by_room", (q) => q.eq("roomId", roomId))
+      .collect()
+  ).filter((p) => p.userId !== bot.userId);
+
+  const { propertyBuffer } = BOT_DIFFICULTY[difficulty];
+  for (const opponent of shuffle(others)) {
+    const opponentProps = opponent.properties ?? [];
+    if (opponentProps.length === 0) continue;
+    const target = [...opponentProps].sort((a, b) => b.value - a.value)[0];
+    // Aggressive bots overpay a bit to close the deal; conservative bots lowball.
+    const offerCash =
+      difficulty === "aggressive"
+        ? Math.round(target.value * 1.1)
+        : Math.round(target.value * 0.85);
+    if (offerCash > money || money - offerCash < propertyBuffer) continue;
+
+    await ctx.db.insert("trades", {
+      roomId,
+      fromUserId: bot.userId,
+      fromName: bot.name,
+      toUserId: opponent.userId,
+      toName: opponent.name,
+      offerPropertyIds: [],
+      offerCash,
+      requestPropertyIds: [target.instanceId],
+      requestCash: 0,
+      status: "pending",
+      createdAt: Date.now(),
+    });
+    return `🤝 ${bot.name} offered $${offerCash.toLocaleString()} to ${opponent.name} for ${target.name}`;
+  }
+  return null;
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────
@@ -978,18 +1118,38 @@ export const botTurn = internalMutation({
       }
     }
 
-    // NEW — Property upgrade, at most one per turn, before the bot decides
-    // what to play (so a payday-fresh bot can immediately reinvest).
+    // Property upgrade, at most one per turn, before the bot decides what
+    // to play (so a payday-fresh bot can immediately reinvest).
     const upgradeResult = resolveBotUpgrade(
       botMoney,
       bot.properties ?? [],
       difficulty,
     );
     botMoney = upgradeResult.money;
-    const botProperties = upgradeResult.properties;
+    let botProperties = upgradeResult.properties;
     const upgradeLastAction = upgradeResult.label;
 
-    const combinedPrefix = [gambleLastAction, upgradeLastAction]
+    // NEW — Trading: respond to any offers sent to this bot, then maybe
+    // propose one of its own. Runs after the upgrade step so a bot that
+    // just cashed out on an upgrade decision has an accurate cash figure
+    // to trade with.
+    const tradeResult = await resolveBotTradeOffers(ctx, roomId, bot);
+    botMoney = tradeResult.money;
+    botProperties = tradeResult.properties;
+    const proposeTradeLastAction = await maybeProposeBotTrade(
+      ctx,
+      roomId,
+      bot,
+      botMoney,
+      difficulty,
+    );
+
+    const combinedPrefix = [
+      gambleLastAction,
+      upgradeLastAction,
+      tradeResult.label,
+      proposeTradeLastAction,
+    ]
       .filter(Boolean)
       .join(" ");
 

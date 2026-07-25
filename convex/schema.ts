@@ -171,4 +171,31 @@ export default defineSchema({
     text: v.string(),
     createdAt: v.number(),
   }).index("by_room", ["roomId"]),
+
+  // ─── Trading additions ────────────────────────────────────────────────
+  // A single offer/counter-offer between two players in the same room.
+  // Properties are referenced by `instanceId` (unique per owned copy) so a
+  // trade always points at a specific card, not just a property type.
+  trades: defineTable({
+    roomId: v.id("rooms"),
+    fromUserId: v.string(),
+    fromName: v.string(),
+    toUserId: v.string(),
+    toName: v.string(),
+    offerPropertyIds: v.array(v.string()), // instanceIds owned by fromUserId
+    offerCash: v.number(),
+    requestPropertyIds: v.array(v.string()), // instanceIds owned by toUserId
+    requestCash: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("declined"),
+      v.literal("cancelled"),
+    ),
+    createdAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_room", ["roomId"])
+    .index("by_to_user", ["toUserId"])
+    .index("by_from_user", ["fromUserId"]),
 });
