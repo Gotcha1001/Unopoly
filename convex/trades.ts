@@ -8,6 +8,10 @@ import { Doc, Id } from "./_generated/dataModel";
 // accepts, declines, or the proposer cancels it. Nothing moves hands
 // until `respondTrade` is called with accept: true — proposing a trade
 // never touches money or property ownership on its own.
+//
+// Exception: if the recipient is a bot, proposeTrade resolves the trade
+// immediately (see resolveIncomingBotTrade below) instead of waiting for
+// the bot's next turn, so a human's offer never sits in limbo.
 
 type PropertyHolding = Doc<"players">["properties"][number];
 
@@ -22,6 +26,115 @@ async function getPlayer(
       q.eq("userId", userId).eq("roomId", roomId),
     )
     .first();
+}
+
+// Evaluates and immediately resolves a single trade sent TO a bot, so bots
+// never leave a human's offer hanging until their next turn. Bots accept
+// only if the deal nets them a modest premium (gain >= cost * 1.05) and
+// they can afford the requested cash. Exported so bot-turn code (e.g.
+// resolveBotTradeOffers) can reuse the same logic for its per-turn
+// safety-net sweep instead of duplicating it.
+export async function resolveIncomingBotTrade(
+  ctx: MutationCtx,
+  trade: Doc<"trades">,
+): Promise<boolean | null> {
+  const fromPlayer = await getPlayer(ctx, trade.roomId, trade.fromUserId);
+  const toPlayer = await getPlayer(ctx, trade.roomId, trade.toUserId); // the bot
+  if (!fromPlayer || !toPlayer) return null;
+  if (trade.status !== "pending") return null;
+
+  const offeredProps = (fromPlayer.properties ?? []).filter(
+    (p: PropertyHolding) => trade.offerPropertyIds.includes(p.instanceId),
+  );
+  const requestedProps = (toPlayer.properties ?? []).filter(
+    (p: PropertyHolding) => trade.requestPropertyIds.includes(p.instanceId),
+  );
+  if (
+    offeredProps.length !== trade.offerPropertyIds.length ||
+    requestedProps.length !== trade.requestPropertyIds.length
+  ) {
+    // Ownership shifted since the offer went out — leave it pending,
+    // the per-turn sweep will clean it up once it can no longer validate.
+    return null;
+  }
+
+  const gain = trade.offerCash + offeredProps.reduce((s, p) => s + p.value, 0);
+  const cost =
+    trade.requestCash + requestedProps.reduce((s, p) => s + p.value, 0);
+  // A trade that asks the bot for $0 cash never needs to be "afforded" —
+  // guard on requestCash > 0 first so a bot sitting on negative money
+  // (e.g. mid-rent-debt) can still accept a cash-for-property offer that
+  // doesn't ask it for any cash.
+  const canAfford =
+    trade.requestCash <= 0 || trade.requestCash <= (toPlayer.money ?? 0);
+  const accept = canAfford && gain >= cost * 1.05;
+
+  await ctx.db.patch(trade._id, {
+    status: accept ? "accepted" : "declined",
+    resolvedAt: Date.now(),
+  });
+
+  if (accept) {
+    await ctx.db.patch(fromPlayer._id, {
+      money: (fromPlayer.money ?? 0) - trade.offerCash + trade.requestCash,
+      properties: [
+        ...(fromPlayer.properties ?? []).filter(
+          (p: PropertyHolding) =>
+            !trade.offerPropertyIds.includes(p.instanceId),
+        ),
+        ...requestedProps,
+      ],
+    });
+    await ctx.db.patch(toPlayer._id, {
+      money: (toPlayer.money ?? 0) - trade.requestCash + trade.offerCash,
+      properties: [
+        ...(toPlayer.properties ?? []).filter(
+          (p: PropertyHolding) =>
+            !trade.requestPropertyIds.includes(p.instanceId),
+        ),
+        ...offeredProps,
+      ],
+    });
+
+    // Any other pending trades referencing a property that just changed
+    // hands are now invalid — auto-decline them, same as respondTrade does.
+    const movedIds = new Set([
+      ...trade.offerPropertyIds,
+      ...trade.requestPropertyIds,
+    ]);
+    const roomTrades = await ctx.db
+      .query("trades")
+      .withIndex("by_room", (q) => q.eq("roomId", trade.roomId))
+      .collect();
+    for (const t of roomTrades) {
+      if (
+        t._id !== trade._id &&
+        t.status === "pending" &&
+        [...t.offerPropertyIds, ...t.requestPropertyIds].some((id) =>
+          movedIds.has(id),
+        )
+      ) {
+        await ctx.db.patch(t._id, {
+          status: "declined",
+          resolvedAt: Date.now(),
+        });
+      }
+    }
+  }
+
+  const game = await ctx.db
+    .query("games")
+    .withIndex("by_room", (q) => q.eq("roomId", trade.roomId))
+    .first();
+  if (game) {
+    await ctx.db.patch(game._id, {
+      lastAction: accept
+        ? `🤝 ${toPlayer.name} accepted ${fromPlayer.name}'s trade offer!`
+        : `🤖 ${toPlayer.name} declined ${fromPlayer.name}'s trade offer.`,
+    });
+  }
+
+  return accept;
 }
 
 // All trades relevant to a player in a room: pending offers sent TO them,
@@ -85,7 +198,10 @@ export const proposeTrade = mutation({
     const toPlayer = await getPlayer(ctx, roomId, toUserId);
     if (!fromPlayer || !toPlayer) throw new Error("Player not found");
 
-    if (offerCash > (fromPlayer.money ?? 0)) {
+    // A $0 cash offer never needs to be "afforded" — only check when the
+    // proposer is actually putting up cash, so a player sitting on
+    // negative money can still offer property-only (or 0-cash) trades.
+    if (offerCash > 0 && offerCash > (fromPlayer.money ?? 0)) {
       throw new Error("You don't have that much cash to offer");
     }
     const fromOwned = new Set(
@@ -103,6 +219,25 @@ export const proposeTrade = mutation({
       );
     }
 
+    // Snapshot {propertyTypeId, name} for every property in this trade, at
+    // proposal time. instanceIds alone aren't enough for the recipient's UI
+    // to show an icon + name later without another query — and by the time
+    // the trade resolves, the property may have already changed hands, so
+    // this snapshot is also what keeps the history accurate after the fact.
+    // Order matches offerPropertyIds/requestPropertyIds exactly, index-for-index.
+    const offerPropertyDetails = offerPropertyIds.map((instId) => {
+      const p = (fromPlayer.properties ?? []).find(
+        (pp: PropertyHolding) => pp.instanceId === instId,
+      );
+      return { id: p?.id ?? "unknown", name: p?.name ?? "a property" };
+    });
+    const requestPropertyDetails = requestPropertyIds.map((instId) => {
+      const p = (toPlayer.properties ?? []).find(
+        (pp: PropertyHolding) => pp.instanceId === instId,
+      );
+      return { id: p?.id ?? "unknown", name: p?.name ?? "a property" };
+    });
+
     const tradeId = await ctx.db.insert("trades", {
       roomId,
       fromUserId,
@@ -110,12 +245,23 @@ export const proposeTrade = mutation({
       toUserId,
       toName: toPlayer.name,
       offerPropertyIds,
+      offerPropertyDetails,
       offerCash,
       requestPropertyIds,
+      requestPropertyDetails,
       requestCash,
       status: "pending",
       createdAt: Date.now(),
     });
+
+    // If the recipient is a bot, respond immediately instead of waiting
+    // for its turn to come around — otherwise the offer just sits pending
+    // indefinitely and the game moves on without ever resolving it.
+    if (toPlayer.isBot) {
+      const trade = (await ctx.db.get(tradeId))!;
+      await resolveIncomingBotTrade(ctx, trade);
+      return tradeId;
+    }
 
     const game = await ctx.db
       .query("games")
@@ -180,10 +326,14 @@ export const respondTrade = mutation({
 
     // Re-validate everything at accept time — properties/cash may have
     // moved (sold, upgraded, spent, another trade) since the offer went out.
-    if ((fromPlayer.money ?? 0) < trade.offerCash) {
+    // Guard each check on the relevant cash amount actually being > 0:
+    // a trade that asks nobody for cash should never fail on a cash check,
+    // even if that player's balance happens to be negative for unrelated
+    // reasons (e.g. mid-rent-debt) — 0 owed is always affordable.
+    if (trade.offerCash > 0 && (fromPlayer.money ?? 0) < trade.offerCash) {
       throw new Error(`${trade.fromName} no longer has enough cash`);
     }
-    if ((toPlayer.money ?? 0) < trade.requestCash) {
+    if (trade.requestCash > 0 && (toPlayer.money ?? 0) < trade.requestCash) {
       throw new Error("You no longer have enough cash for this trade");
     }
     const fromProps = fromPlayer.properties ?? [];
@@ -272,5 +422,12 @@ export const respondTrade = mutation({
         lastAction: `🤝 ${trade.fromName} and ${trade.toName} completed a trade (${trade.fromName} gave ${gaveStr})!`,
       });
     }
+  },
+});
+
+export const getTrade = query({
+  args: { tradeId: v.id("trades") },
+  handler: async (ctx, { tradeId }): Promise<Doc<"trades"> | null> => {
+    return await ctx.db.get(tradeId);
   },
 });
