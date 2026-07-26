@@ -24,7 +24,13 @@ import { PropertyIcon } from "./PropertyIcon";
 import { PropertyMediaHeader } from "./PropertyMediaHeader";
 import { CardEffectHeader } from "./Cardeffectheader";
 import { UpgradeMediaHeader } from "./Upgrademediaheader";
-import { TradeModal, TradeInbox } from "./Tradepanel";
+import {
+  TradeModal,
+  TradeInbox,
+  BuyOfferModal,
+  SellOfferModal,
+  OutgoingOfferPopup,
+} from "./Tradepanel";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -296,6 +302,61 @@ export function GameBoard({
 
   const [tradeTargetId, setTradeTargetId] = useState<string | null>(null);
   const tradeTarget = opponents.find((p) => p.userId === tradeTargetId) ?? null;
+  const [outgoingOfferTradeId, setOutgoingOfferTradeId] =
+    useState<Id<"trades"> | null>(null);
+
+  // ── NEW: trade-offer entry points ──────────────────────────────────────
+  // pendingOfferPropertyId is set when the flow was started from a specific
+  // owned property (the "🤝 Offer to opponents" button in the upgrade
+  // modal), so we know to open SellOfferModal (single property, asking
+  // price only) instead of the generic multi-item TradeModal.
+  // showOpponentPicker covers the case where there's more than one opponent
+  // and we don't yet know who to send the offer to --- the generic "🤝
+  // Trade" button per-opponent skips this (it sets tradeTargetId directly),
+  // but the property-specific "Offer to opponents" button funnels through
+  // openTradeFlow() below, which does need to ask.
+  const [pendingOfferPropertyId, setPendingOfferPropertyId] = useState<
+    string | null
+  >(null);
+  const [showOpponentPicker, setShowOpponentPicker] = useState(false);
+
+  const openTradeFlow = (propertyInstanceId: string | null) => {
+    if (opponents.length === 0) {
+      toast.error("No opponents to trade with");
+      return;
+    }
+    setPendingOfferPropertyId(propertyInstanceId);
+    if (opponents.length === 1) {
+      setTradeTargetId(opponents[0].userId);
+    } else {
+      setShowOpponentPicker(true);
+    }
+  };
+
+  // ── NEW: "make an offer" (buy) flow ────────────────────────────────────
+  // A separate, simpler path from the sell flow above --- this is for
+  // offering cash to BUY one of an opponent's properties, so it only ever
+  // makes sense against opponents who actually own something. The button
+  // that triggers this is hidden entirely otherwise (see render below).
+  const opponentsWithProperties = opponents.filter(
+    (o) => (o.properties ?? []).length > 0,
+  );
+  const [buyOfferTargetId, setBuyOfferTargetId] = useState<string | null>(null);
+  const buyOfferTarget =
+    opponentsWithProperties.find((p) => p.userId === buyOfferTargetId) ?? null;
+  const [showBuyOpponentPicker, setShowBuyOpponentPicker] = useState(false);
+
+  const openBuyOfferFlow = () => {
+    if (opponentsWithProperties.length === 0) {
+      toast.error("No opponent properties to offer on yet");
+      return;
+    }
+    if (opponentsWithProperties.length === 1) {
+      setBuyOfferTargetId(opponentsWithProperties[0].userId);
+    } else {
+      setShowBuyOpponentPicker(true);
+    }
+  };
 
   const currentPlayerName =
     players.find((p) => p.userId === currentPlayerId)?.name ?? "Unknown";
@@ -410,11 +471,12 @@ export function GameBoard({
   }, [game.status, game.winnerId, currentUserId, play]);
 
   // A 7-day week (turns 1-7), then payday on the 8th turn --- like next
-  // Monday --- everyone gets paid a $200 "salary". The server stamps
-  // salaryNotice.at with a fresh timestamp each time it happens, so this
-  // just watches for that timestamp changing (not the raw presence of the
-  // field, since it persists after the modal is dismissed) and pops the
-  // modal exactly once per payout, for every player at the table at once.
+  // Monday --- everyone still in the game gets paid a $200 "salary". The
+  // server stamps salaryNotice.at with a fresh timestamp each time it
+  // happens, so this just watches for that timestamp changing (not the raw
+  // presence of the field, since it persists after the modal is dismissed)
+  // and pops the modal exactly once per payout, for every player at the
+  // table at once.
   //
   // We also back out cashBefore (post-payday cash minus what was just
   // earned) so the modal can seed AnimatedCash's `from` and let it visibly
@@ -1392,6 +1454,20 @@ export function GameBoard({
                 ))
               )}
             </div>
+
+            {/* Row 3: "make an offer" --- offer cash to buy one of an
+                opponent's properties. Only shown once someone actually owns
+                a property to offer on; with an empty board (like at game
+                start) there's nothing to make an offer for, so the button
+                stays hidden rather than opening an empty picker. ────────── */}
+            {opponentsWithProperties.length > 0 && (
+              <button
+                onClick={openBuyOfferFlow}
+                className="mt-1 px-3 py-1.5 rounded-xl border border-purple-400/30 bg-purple-400/10 text-purple-200 text-[11px] font-semibold hover:bg-purple-400/20 hover:border-purple-400/50 transition-all"
+              >
+                🤝 Make an offer
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1659,6 +1735,26 @@ export function GameBoard({
                   </div>
                 );
               })()}
+
+              {/* ── NEW: offer this specific property to an opponent ──────
+                  Sits right below the upgrade panel, inside the same "owned
+                  property" modal --- lets the person send the property they're
+                  already looking at straight into a trade offer without
+                  hunting for it again in the generic trade panel. */}
+              {opponents.length > 0 && (
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    const propertyId = selectedProperty.instanceId;
+                    setSelectedPropertyId(null);
+                    openTradeFlow(propertyId);
+                  }}
+                  className="w-full mt-3 py-2.5 rounded-xl font-bold text-purple-200 border border-purple-400/40 bg-purple-400/10 hover:bg-purple-400/20 transition-all text-sm"
+                >
+                  🤝 Offer to opponents
+                </motion.button>
+              )}
 
               <button
                 onClick={() => setSelectedPropertyId(null)}
@@ -1939,9 +2035,141 @@ export function GameBoard({
         )}
       </AnimatePresence>
 
+      {/* ── Opponent picker --- used when a trade flow starts without a
+          specific opponent already chosen (2+ opponents at the table) ──── */}
+      <AnimatePresence>
+        {showOpponentPicker && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center px-4"
+            style={{
+              background: "rgba(0,0,0,0.75)",
+              backdropFilter: "blur(8px)",
+            }}
+            onClick={() => {
+              setShowOpponentPicker(false);
+              setPendingOfferPropertyId(null);
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.7, y: 30, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.7, y: 30, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 360, damping: 26 }}
+              onClick={(e) => e.stopPropagation()}
+              className="p-6 rounded-3xl border border-white/20 text-center max-w-xs w-full"
+              style={{
+                background:
+                  "linear-gradient(145deg, rgba(40,15,60,0.97) 0%, rgba(20,8,35,0.97) 100%)",
+                boxShadow:
+                  "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(147,51,234,0.3)",
+              }}
+            >
+              <h3 className="font-black text-xl mb-4 text-white tracking-tight">
+                {pendingOfferPropertyId
+                  ? "🤝 Offer to who?"
+                  : "🤝 Trade with who?"}
+              </h3>
+              <div className="flex flex-col gap-2 mb-3">
+                {opponents.map((opp) => (
+                  <button
+                    key={opp.userId}
+                    onClick={() => {
+                      setTradeTargetId(opp.userId);
+                      setShowOpponentPicker(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white border border-white/15 bg-white/5 hover:bg-white/10 transition-all"
+                  >
+                    {opp.isBot ? "🤖" : "👤"} {opp.name}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  setShowOpponentPicker(false);
+                  setPendingOfferPropertyId(null);
+                }}
+                className="text-white/50 text-xs hover:text-white/80 transition-colors"
+              >
+                Cancel
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Buy-offer opponent picker --- only lists opponents who actually
+          own a property, since this flow is "offer cash to buy theirs." ── */}
+      <AnimatePresence>
+        {showBuyOpponentPicker && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center px-4"
+            style={{
+              background: "rgba(0,0,0,0.75)",
+              backdropFilter: "blur(8px)",
+            }}
+            onClick={() => setShowBuyOpponentPicker(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.7, y: 30, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.7, y: 30, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 360, damping: 26 }}
+              onClick={(e) => e.stopPropagation()}
+              className="p-6 rounded-3xl border border-white/20 text-center max-w-xs w-full"
+              style={{
+                background:
+                  "linear-gradient(145deg, rgba(40,15,60,0.97) 0%, rgba(20,8,35,0.97) 100%)",
+                boxShadow:
+                  "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(147,51,234,0.3)",
+              }}
+            >
+              <h3 className="font-black text-xl mb-4 text-white tracking-tight">
+                🤝 Make an offer to who?
+              </h3>
+              <div className="flex flex-col gap-2 mb-3">
+                {opponentsWithProperties.map((opp) => (
+                  <button
+                    key={opp.userId}
+                    onClick={() => {
+                      setBuyOfferTargetId(opp.userId);
+                      setShowBuyOpponentPicker(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white border border-white/15 bg-white/5 hover:bg-white/10 transition-all"
+                  >
+                    {opp.isBot ? "🤖" : "👤"} {opp.name}{" "}
+                    <span className="text-white/40 text-xs">
+                      ({(opp.properties ?? []).length} propert
+                      {(opp.properties ?? []).length === 1 ? "y" : "ies"})
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setShowBuyOpponentPicker(false)}
+                className="text-white/50 text-xs hover:text-white/80 transition-colors"
+              >
+                Cancel
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <TradeInbox roomId={room._id} userId={currentUserId} />
-      {tradeTarget && myPlayer && (
-        <TradeModal
+      {outgoingOfferTradeId && (
+        <OutgoingOfferPopup
+          tradeId={outgoingOfferTradeId}
+          onDone={() => setOutgoingOfferTradeId(null)}
+        />
+      )}
+      {buyOfferTarget && myPlayer && (
+        <BuyOfferModal
           roomId={room._id}
           me={{
             userId: myPlayer.userId,
@@ -1950,14 +2178,69 @@ export function GameBoard({
             properties: myPlayer.properties ?? [],
           }}
           opponent={{
-            userId: tradeTarget.userId,
-            name: tradeTarget.name,
-            money: tradeTarget.money ?? 0,
-            properties: tradeTarget.properties ?? [],
+            userId: buyOfferTarget.userId,
+            name: buyOfferTarget.name,
+            money: buyOfferTarget.money ?? 0,
+            properties: buyOfferTarget.properties ?? [],
           }}
-          onClose={() => setTradeTargetId(null)}
+          onClose={() => setBuyOfferTargetId(null)}
+          onSent={setOutgoingOfferTradeId}
         />
       )}
+      {tradeTarget &&
+        myPlayer &&
+        (pendingOfferPropertyId ? (
+          (() => {
+            const offeredProperty = myProperties.find(
+              (p) => p.instanceId === pendingOfferPropertyId,
+            );
+            if (!offeredProperty) return null;
+            return (
+              <SellOfferModal
+                roomId={room._id}
+                me={{
+                  userId: myPlayer.userId,
+                  name: myPlayer.name,
+                  money: myPlayer.money ?? 0,
+                  properties: myPlayer.properties ?? [],
+                }}
+                opponent={{
+                  userId: tradeTarget.userId,
+                  name: tradeTarget.name,
+                  money: tradeTarget.money ?? 0,
+                  properties: tradeTarget.properties ?? [],
+                }}
+                property={offeredProperty}
+                onClose={() => {
+                  setTradeTargetId(null);
+                  setPendingOfferPropertyId(null);
+                }}
+                onSent={setOutgoingOfferTradeId}
+              />
+            );
+          })()
+        ) : (
+          <TradeModal
+            roomId={room._id}
+            me={{
+              userId: myPlayer.userId,
+              name: myPlayer.name,
+              money: myPlayer.money ?? 0,
+              properties: myPlayer.properties ?? [],
+            }}
+            opponent={{
+              userId: tradeTarget.userId,
+              name: tradeTarget.name,
+              money: tradeTarget.money ?? 0,
+              properties: tradeTarget.properties ?? [],
+            }}
+            onClose={() => {
+              setTradeTargetId(null);
+              setPendingOfferPropertyId(null);
+            }}
+            onSent={setOutgoingOfferTradeId}
+          />
+        ))}
     </div>
   );
 }

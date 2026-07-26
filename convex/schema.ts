@@ -183,8 +183,14 @@ export default defineSchema({
     toUserId: v.string(),
     toName: v.string(),
     offerPropertyIds: v.array(v.string()), // instanceIds owned by fromUserId
+    offerPropertyDetails: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string() })),
+    ), // snapshot of {property type id, display name} for icons — same order as offerPropertyIds
     offerCash: v.number(),
     requestPropertyIds: v.array(v.string()), // instanceIds owned by toUserId
+    requestPropertyDetails: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string() })),
+    ), // snapshot of {property type id, display name} for icons — same order as requestPropertyIds
     requestCash: v.number(),
     status: v.union(
       v.literal("pending"),
