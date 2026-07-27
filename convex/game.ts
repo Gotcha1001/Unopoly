@@ -465,12 +465,15 @@
 //       offerPropertyDetails: [],
 //       offerCash,
 //       requestPropertyIds: [target.instanceId],
+//       // Snapshot the property's {type id, name} so the recipient's trade
+//       // popup can show its name and video instead of falling back to a
+//       // generic "1 property" — mirrors what proposeTrade already does for
+//       // human-initiated trades in Convex/trades.ts.
 //       requestPropertyDetails: [{ id: target.id, name: target.name }],
 //       requestCash: 0,
 //       status: "pending",
 //       createdAt: Date.now(),
 //     });
-
 //     return `🤝 ${bot.name} offered $${offerCash.toLocaleString()} to ${opponent.name} for ${target.name}`;
 //   }
 //   return null;
@@ -1421,6 +1424,7 @@
 //   }
 //   return { money, properties, label: null };
 // }
+
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
@@ -1607,10 +1611,12 @@ function dealInitialHand(
 
 // ─── Salary: every 8th turn *per player* (a 7-day week, then payday --- "next
 // Monday") --- everyone still in the game gets paid. Amount grows a little
-// each payday instead of staying flat at $200. ─────────────────────────────
+// each payday instead of staying flat at $200. Savings interest is paid out
+// on the same beat --- see paySalaryIfDue below. ───────────────────────────
 const SALARY_INTERVAL = 8;
 const SALARY_BASE = 500; // salary on the very first payday
 const SALARY_GROWTH_PER_PAYDAY = 50; // flat increase each payday after that
+const SAVINGS_INTEREST_RATE = 0.02; // 2% of savings, paid out every payday
 
 const RENT_PERCENTAGE = 0.17;
 const RENT_MIN_PROPERTIES = 2;
@@ -1635,6 +1641,7 @@ async function paySalaryIfDue(
       turnCount: number;
       amount: number;
       rentByPlayer: { userId: string; amount: number }[];
+      interestByPlayer: { userId: string; amount: number }[];
       at: number;
     }
   | undefined
@@ -1659,14 +1666,23 @@ async function paySalaryIfDue(
     SALARY_BASE + (paydayNumber - 1) * SALARY_GROWTH_PER_PAYDAY;
 
   const rentByPlayer: { userId: string; amount: number }[] = [];
+  const interestByPlayer: { userId: string; amount: number }[] = [];
 
   for (const p of allPlayers) {
     const rent = calculateRent(p.properties);
+    const savings = p.savings ?? 0;
+    const interest = Math.round(savings * SAVINGS_INTEREST_RATE);
+
     await ctx.db.patch(p._id, {
       money: (p.money ?? 0) + salaryAmount + rent,
+      savings: savings + interest,
     });
+
     if (rent > 0) {
       rentByPlayer.push({ userId: p.userId, amount: rent });
+    }
+    if (interest > 0) {
+      interestByPlayer.push({ userId: p.userId, amount: interest });
     }
   }
 
@@ -1674,6 +1690,7 @@ async function paySalaryIfDue(
     turnCount: newTurnCount,
     amount: salaryAmount,
     rentByPlayer,
+    interestByPlayer,
     at: Date.now(),
   };
 }
@@ -1918,10 +1935,15 @@ export const getGame = query({
       rentByPlayer[entry.userId] = entry.amount;
     }
 
+    const interestByPlayer: Record<string, number> = {};
+    for (const entry of game.salaryNotice?.interestByPlayer ?? []) {
+      interestByPlayer[entry.userId] = entry.amount;
+    }
+
     return {
       ...game,
       salaryNotice: game.salaryNotice
-        ? { ...game.salaryNotice, rentByPlayer }
+        ? { ...game.salaryNotice, rentByPlayer, interestByPlayer }
         : undefined,
     };
   },
@@ -1984,6 +2006,7 @@ export const startGame = mutation({
         // Fresh, EQUAL financial slate every game --- nobody starts richer or
         // poorer than anyone else.
         money: 3000,
+        savings: 0,
         properties: [],
         pendingProperties: [],
         pendingLifeEvents: [],

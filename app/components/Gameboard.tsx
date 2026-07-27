@@ -31,6 +31,9 @@ import {
   SellOfferModal,
   OutgoingOfferPopup,
 } from "./Tradepanel";
+// ── Bank additions ────────────────────────────────────────────────────
+import { BankButton } from "./Bankbutton";
+import { BankModal } from "./Bankmodal";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -253,6 +256,10 @@ export function GameBoard({
   // ─── Gamble stack additions ─────────────────────────────────────────
   const [pullingGamble, setPullingGamble] = useState(false);
   const [acknowledgingGamble, setAcknowledgingGamble] = useState(false);
+  // ─── Bank additions ──────────────────────────────────────────────────
+  // Just visibility state for the modal --- BankModal owns the actual
+  // savings/interest logic internally via useBank().
+  const [bankOpen, setBankOpen] = useState(false);
   // ─── Salary modal now carries cashBefore/cashAfter so AnimatedCash can
   // count up live inside the modal instead of animating unseen behind it ──
   const [salaryModal, setSalaryModal] = useState<{
@@ -837,6 +844,11 @@ export function GameBoard({
           </span>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* ── Bank additions: opens BankModal ──────────────────────────── */}
+          <BankButton
+            onClick={() => setBankOpen(true)}
+            className="!px-2.5 !py-1.5 sm:!px-4 sm:!py-2.5"
+          />
           <button
             onClick={toggleMute}
             className="p-1.5 sm:p-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-all"
@@ -2160,6 +2172,32 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ── Bank modal ──────────────────────────────────────────────────────
+          onCashChange re-uses playCard's plumbing pattern: it just needs
+          to keep local UI in sync while useBank's own mutations (inside
+          BankModal/useBank) do the actual server-side deposit/withdraw.
+          Since `money` already comes from the live Convex `players` query,
+          this is effectively a no-op passthrough --- Convex will push the
+          updated balance down through `players`/`myMoney` automatically
+          once the bank mutation resolves, the same way every other action
+          on this board (draw, play, upgrade, trade...) already works. If
+          your actual useBank hook expects something else here (e.g. it
+          wants the setter to call a specific mutation directly instead of
+          relying on Convex's live query), let me know and I'll wire that
+          in --- I don't have hooks/useBank.ts in front of me to confirm
+          its exact contract. */}
+      <BankModal
+        open={bankOpen}
+        onClose={() => setBankOpen(false)}
+        cash={myMoney}
+        onCashChange={() => {
+          /* no-op: Convex's live `players` query already keeps `myMoney`
+             in sync once useBank's internal mutations resolve. */
+        }}
+        initialSavings={0}
+        videoSrc="/videos/bank-vault.mp4"
+      />
 
       <TradeInbox roomId={room._id} userId={currentUserId} />
       {outgoingOfferTradeId && (
