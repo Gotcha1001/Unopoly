@@ -31,6 +31,8 @@ export default defineSchema({
     name: v.string(),
     avatarUrl: v.optional(v.string()),
     isBot: v.boolean(),
+    savings: v.optional(v.number()),
+    lastInterestTurn: v.optional(v.number()),
     difficulty: v.optional(
       v.union(v.literal("aggressive"), v.literal("conservative")),
     ),
@@ -139,10 +141,13 @@ export default defineSchema({
     salaryNotice: v.optional(
       v.object({
         turnCount: v.number(),
-        amount: v.number(), // salary only, unchanged
+        amount: v.number(),
         rentByPlayer: v.array(
           v.object({ userId: v.string(), amount: v.number() }),
         ),
+        interestByPlayer: v.array(
+          v.object({ userId: v.string(), amount: v.number() }),
+        ), // NEW
         at: v.number(),
       }),
     ),
