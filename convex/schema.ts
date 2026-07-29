@@ -162,6 +162,13 @@ export default defineSchema({
         at: v.number(),
       }),
     ),
+    coachCommentary: v.optional(
+      v.object({
+        text: v.string(),
+        turnCount: v.number(),
+        at: v.number(),
+      }),
+    ),
     // ─── Gamble stack additions ─────────────────────────────────────────
     // Shuffled queue of gamble-event ids, drawn from top when a player
     // taps the Gamble pile. Reshuffled from the full GAMBLE_EVENTS catalog

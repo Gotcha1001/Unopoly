@@ -279,6 +279,21 @@ export function GameBoard({
     number | null
   >(null);
 
+  // ─── AI coach commentary ─────────────────────────────────────────────
+  // Only fetched while the payday modal is open, keyed on this specific
+  // payday's turnCount so it never re-fires mid-week. Skipped entirely on
+  // any turn that isn't a payday. Requires a *public* `coach.getCommentary`
+  // query in convex/coach.ts — separate from the `internal.coachData`
+  // helpers, since internal functions can't be called from the client.
+  // Returns: undefined while loading, null if there's no line for this
+  // payday (e.g. not this week's "coach week"), or the quip itself.
+  const coachCommentary = useQuery(
+    api.coachData.getCommentary,
+    salaryModal
+      ? { roomId: room._id, turnCount: salaryModal.turnCount }
+      : "skip",
+  );
+
   const { selected: boardBg } = useBackground();
 
   // Ref for the discard pile drop target
@@ -2031,6 +2046,30 @@ export function GameBoard({
                 Another week&apos;s gone by at the table --- payday for everyone
                 still playing!
               </p>
+
+              {/* ─── AI coach commentary ────────────────────────────────
+                  Only shows on weeks the backend actually generated a
+                  line (coachCommentary === null means "not a coach week,"
+                  so nothing renders at all --- the layout doesn't shift).
+                  While loading (undefined), a quiet skeleton holds the
+                  spot so the "Nice!" button doesn't jump down once the
+                  line pops in. */}
+              {coachCommentary !== null && (
+                <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-xl bg-black/20 border border-yellow-400/20 text-left">
+                  <span className="text-base leading-none mt-0.5">🎙️</span>
+                  {coachCommentary === undefined ? (
+                    <div className="flex-1 space-y-1.5 py-0.5">
+                      <div className="h-2.5 w-full rounded bg-white/10 animate-pulse" />
+                      <div className="h-2.5 w-2/3 rounded bg-white/10 animate-pulse" />
+                    </div>
+                  ) : (
+                    <p className="text-xs text-white/70 italic leading-snug">
+                      {coachCommentary}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
