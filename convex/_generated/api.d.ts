@@ -9,6 +9,8 @@
  */
 
 import type * as bank from "../bank.js";
+import type * as coach from "../coach.js";
+import type * as coachData from "../coachData.js";
 import type * as game from "../game.js";
 import type * as rooms from "../rooms.js";
 import type * as trades from "../trades.js";
@@ -22,6 +24,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   bank: typeof bank;
+  coach: typeof coach;
+  coachData: typeof coachData;
   game: typeof game;
   rooms: typeof rooms;
   trades: typeof trades;
