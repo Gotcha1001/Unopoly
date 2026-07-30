@@ -34,6 +34,7 @@ import {
 // ── Bank additions ────────────────────────────────────────────────────
 import { BankButton } from "./Bankbutton";
 import { BankModal } from "./Bankmodal";
+import { useStreamingText } from "@/hooks/useStreamingText";
 
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
@@ -287,12 +288,24 @@ export function GameBoard({
   // helpers, since internal functions can't be called from the client.
   // Returns: undefined while loading, null if there's no line for this
   // payday (e.g. not this week's "coach week"), or the quip itself.
-  const coachCommentary = useQuery(
+  const coachData = useQuery(
     api.coachData.getCommentary,
     salaryModal
       ? { roomId: room._id, turnCount: salaryModal.turnCount }
       : "skip",
   );
+
+  // coachData is now: undefined (Convex's own initial-fetch loading state,
+  // typically gone in one round trip) | null (not a coach week) |
+  // { status: "pending" | "streaming" | "done", text: string }
+  const streamedText = useStreamingText(
+    coachData && typeof coachData === "object" ? coachData.text : "",
+    salaryModal?.turnCount ?? 0,
+  );
+  const coachStillCatchingUp =
+    !!coachData &&
+    typeof coachData === "object" &&
+    streamedText.length < coachData.text.length;
 
   const { selected: boardBg } = useBackground();
 
@@ -1963,6 +1976,9 @@ export function GameBoard({
       </AnimatePresence>
 
       {/* ── Salary modal --- payday every 8th turn (a 7-day week), $200 ─────────── */}
+      {/* ── Salary modal — payday every 8th turn (a 7-day week), $200 base,
+    now with a real pending → streaming → done coach state and a
+    radial purple/indigo "futuristic timeout" theme ─────────── */}
       <AnimatePresence>
         {salaryModal && (
           <motion.div
@@ -1971,7 +1987,7 @@ export function GameBoard({
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center px-4"
             style={{
-              background: "rgba(0,0,0,0.75)",
+              background: "rgba(5,2,20,0.78)",
               backdropFilter: "blur(8px)",
             }}
           >
@@ -1980,107 +1996,144 @@ export function GameBoard({
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.7, y: 30, opacity: 0 }}
               transition={{ type: "spring", stiffness: 360, damping: 26 }}
-              className="p-7 rounded-3xl border border-white/20 text-center max-w-xs"
+              className="relative p-7 rounded-3xl border text-center max-w-xs overflow-hidden"
               style={{
+                borderColor: "rgba(196,181,253,0.35)",
                 background:
-                  "linear-gradient(145deg, rgba(60,50,6,0.97) 0%, rgba(35,28,4,0.97) 100%)",
+                  "radial-gradient(circle at 50% 0%, rgba(147,51,234,0.55) 0%, rgba(79,70,229,0.55) 40%, rgba(10,7,32,0.97) 78%)",
                 boxShadow:
-                  "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(250,204,21,0.3)",
+                  "0 30px 80px rgba(0,0,0,0.85), 0 0 90px rgba(168,85,247,0.45), 0 0 40px rgba(99,102,241,0.35)",
               }}
             >
-              <div className="text-5xl mb-2">
-                {salaryModal.rentAmount > 0 ? "💵🏠" : "💵"}
-              </div>
-              <h3 className="font-black text-2xl mb-1 text-white tracking-tight">
-                You earned $
-                {(salaryModal.amount + salaryModal.rentAmount).toLocaleString()}
-                !
-              </h3>
-              {/* ─── Rent additions ─────────────────────────────────────────
-                  Only shown when the player's portfolio actually earned rent
-                  this payday (2+ properties owned) --- otherwise it's just
-                  the plain salary, unchanged from before. */}
-              {salaryModal.rentAmount > 0 && (
-                <p className="text-xs text-emerald-300/80 mb-2 font-semibold">
-                  ${salaryModal.amount.toLocaleString()} salary + $
-                  {salaryModal.rentAmount.toLocaleString()} rent from your
-                  properties
-                </p>
-              )}
-              {/* ─── Animated wallet total ─────────────────────────────────
-                  The whole point of this fix: count up from pre-payday cash
-                  to post-payday cash right here in the modal, since the
-                  wallet strip underneath the hand is hidden behind it while
-                  this is open. Small delay lets the modal finish popping in
-                  before the count-up starts. */}
-              <div className="flex items-center justify-center gap-1.5 mb-3 px-4 py-2 rounded-xl bg-black/20 border border-yellow-400/20">
-                <span className="text-[10px] uppercase tracking-widest text-white/40">
-                  Your cash
-                </span>
-                <AnimatedCash
-                  value={salaryModal.cashAfter}
-                  from={salaryModal.cashBefore}
-                  delay={250}
-                  className="text-lg font-black text-yellow-200"
-                />
-              </div>
-              {/* 7-days-of-the-week strip --- one pip per turn in the cycle */}
-              <div className="flex items-center justify-center gap-1.5 mb-4">
-                {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-                  <div
-                    key={i}
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold"
-                    style={{
-                      background:
-                        i === 6
-                          ? "linear-gradient(145deg, #facc15, #a16207)"
-                          : "rgba(255,255,255,0.1)",
-                      color: i === 6 ? "#3f2d00" : "rgba(255,255,255,0.4)",
-                    }}
-                  >
-                    {d}
-                  </div>
-                ))}
-              </div>
-              <p className="text-white/50 text-xs mb-5">
-                Another week&apos;s gone by at the table --- payday for everyone
-                still playing!
-              </p>
-
-              {/* ─── AI coach commentary ────────────────────────────────
-                  Only shows on weeks the backend actually generated a
-                  line (coachCommentary === null means "not a coach week,"
-                  so nothing renders at all --- the layout doesn't shift).
-                  While loading (undefined), a quiet skeleton holds the
-                  spot so the "Nice!" button doesn't jump down once the
-                  line pops in. */}
-              {coachCommentary !== null && (
-                <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-xl bg-black/20 border border-yellow-400/20 text-left">
-                  <span className="text-base leading-none mt-0.5">🎙️</span>
-                  {coachCommentary === undefined ? (
-                    <div className="flex-1 space-y-1.5 py-0.5">
-                      <div className="h-2.5 w-full rounded bg-white/10 animate-pulse" />
-                      <div className="h-2.5 w-2/3 rounded bg-white/10 animate-pulse" />
-                    </div>
-                  ) : (
-                    <p className="text-xs text-white/70 italic leading-snug">
-                      {coachCommentary}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="px-6 py-2.5 rounded-xl font-bold text-white"
+              {/* Slow-pulsing glow layer behind everything — the "futuristic
+            timeout" heartbeat. Purely decorative, pointer-events off. */}
+              <motion.div
+                className="pointer-events-none absolute inset-0"
                 style={{
-                  background: "linear-gradient(145deg, #facc15, #a16207)",
+                  background:
+                    "radial-gradient(circle at 50% 15%, rgba(196,132,252,0.35), transparent 60%)",
                 }}
-                onClick={() => setSalaryModal(null)}
-              >
-                Nice!
-              </motion.button>
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{
+                  duration: 3,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              />
+
+              <div className="relative">
+                <div className="text-5xl mb-2">
+                  {salaryModal.rentAmount > 0 ? "💵🏠" : "💵"}
+                </div>
+
+                <h3 className="font-black text-2xl mb-1 text-white tracking-tight">
+                  You earned $
+                  {(
+                    salaryModal.amount + salaryModal.rentAmount
+                  ).toLocaleString()}
+                  !
+                </h3>
+
+                {salaryModal.rentAmount > 0 && (
+                  <p className="text-xs text-violet-200/80 mb-2 font-semibold">
+                    ${salaryModal.amount.toLocaleString()} salary + $
+                    {salaryModal.rentAmount.toLocaleString()} rent from your
+                    properties
+                  </p>
+                )}
+
+                {/* Animated wallet total */}
+                <div className="flex items-center justify-center gap-1.5 mb-3 px-4 py-2 rounded-xl bg-black/30 border border-indigo-300/25">
+                  <span className="text-[10px] uppercase tracking-widest text-white/40">
+                    Your cash
+                  </span>
+                  <AnimatedCash
+                    value={salaryModal.cashAfter}
+                    from={salaryModal.cashBefore}
+                    delay={250}
+                    className="text-lg font-black text-fuchsia-200"
+                  />
+                </div>
+
+                {/* 7-days-of-the-week strip */}
+                <div className="flex items-center justify-center gap-1.5 mb-4">
+                  {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+                    <div
+                      key={i}
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold"
+                      style={{
+                        background:
+                          i === 6
+                            ? "linear-gradient(145deg, #c084fc, #4f46e5)"
+                            : "rgba(255,255,255,0.1)",
+                        color: i === 6 ? "#1e1033" : "rgba(255,255,255,0.4)",
+                        boxShadow:
+                          i === 6 ? "0 0 10px rgba(192,132,252,0.6)" : "none",
+                      }}
+                    >
+                      {d}
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-white/50 text-xs mb-5">
+                  Another week&apos;s gone by at the table — payday for everyone
+                  still playing!
+                </p>
+
+                {/* ─── AI coach commentary — three real states now:
+              undefined/pending -> please wait, streaming -> text grows
+              live with a blinking cursor, done -> settled text.
+              coachData === null means genuinely not a coach week, so
+              nothing renders and the layout doesn't shift. ─────── */}
+                {coachData !== null && (
+                  <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-xl bg-black/30 border border-violet-400/25 text-left">
+                    <span className="text-base leading-none mt-0.5">🔮</span>
+                    {coachData === undefined ||
+                    coachData.status === "pending" ? (
+                      <div className="flex-1 flex items-center gap-1.5 py-0.5">
+                        <span className="text-xs text-violet-200/70 italic">
+                          The coach is contemplating your fortune
+                        </span>
+                        <motion.span className="flex gap-0.5" initial="hidden">
+                          {[0, 1, 2].map((i) => (
+                            <motion.span
+                              key={i}
+                              className="w-1 h-1 rounded-full bg-violet-300/80"
+                              animate={{ opacity: [0.2, 1, 0.2] }}
+                              transition={{
+                                duration: 1,
+                                repeat: Infinity,
+                                delay: i * 0.15,
+                              }}
+                            />
+                          ))}
+                        </motion.span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-white/80 italic leading-snug">
+                        {streamedText}
+                        {coachStillCatchingUp && (
+                          <span className="inline-block w-[2px] h-3 ml-0.5 align-middle bg-violet-300 animate-pulse" />
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className="px-6 py-2.5 rounded-xl font-bold text-white"
+                  style={{
+                    background: "linear-gradient(145deg, #a855f7, #4f46e5)",
+                    boxShadow: "0 0 24px rgba(168,85,247,0.45)",
+                  }}
+                  onClick={() => setSalaryModal(null)}
+                >
+                  Nice!
+                </motion.button>
+              </div>
             </motion.div>
           </motion.div>
         )}

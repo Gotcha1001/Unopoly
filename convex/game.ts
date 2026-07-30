@@ -241,6 +241,7 @@ async function paySalaryIfDue(
   const rentByPlayer: { userId: string; amount: number }[] = [];
   const interestByPlayer: { userId: string; amount: number }[] = [];
 
+  // AFTER
   for (const p of allPlayers) {
     const rent = calculateRent(p.properties);
     const savings = p.savings ?? 0;
@@ -258,6 +259,30 @@ async function paySalaryIfDue(
       interestByPlayer.push({ userId: p.userId, amount: interest });
     }
   }
+
+  // NEW — write the "pending" coach placeholder synchronously, in this
+  // SAME transaction as the payday itself, before the generation action
+  // is even scheduled. This is what closes the race: by the time the
+  // client sees the new turnCount, coachCommentary.turnCount already
+  // matches it with status "pending", so getCommentary never has a
+  // window where it looks like "not a coach week" while the coach is
+  // actually just about to start. paySalaryIfDue doesn't otherwise have
+  // the game doc in scope, so fetch its _id here.
+  const game = await ctx.db
+    .query("games")
+    .withIndex("by_room", (q) => q.eq("roomId", roomId))
+    .first();
+  if (game) {
+    await ctx.db.patch(game._id, {
+      coachCommentary: {
+        text: "",
+        status: "pending",
+        turnCount: newTurnCount,
+        at: Date.now(),
+      },
+    });
+  }
+
   await ctx.scheduler.runAfter(0, internal.coach.generateWeeklyCommentary, {
     roomId,
   });
