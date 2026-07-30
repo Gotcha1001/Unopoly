@@ -165,6 +165,11 @@ export default defineSchema({
     coachCommentary: v.optional(
       v.object({
         text: v.string(),
+        status: v.union(
+          v.literal("pending"),
+          v.literal("streaming"),
+          v.literal("done"),
+        ),
         turnCount: v.number(),
         at: v.number(),
       }),
