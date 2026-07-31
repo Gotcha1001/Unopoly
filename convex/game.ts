@@ -1,3 +1,1471 @@
+// import { v } from "convex/values";
+// import { mutation, query, internalMutation } from "./_generated/server";
+// import type { MutationCtx } from "./_generated/server";
+// import type { Id, Doc } from "./_generated/dataModel";
+// import { internal } from "./_generated/api";
+// import { GAMBLE_EVENTS, gambleDef } from "../lib/Gambleevents";
+// import { LIFE_EVENTS } from "@/lib/LifeEvents";
+// import { PROPERTIES } from "@/lib/Properties";
+// import { PROPERTY_UPGRADES } from "@/lib/PropertyUpgrades";
+// import { STOCKS } from "@/lib/Stocks";
+
+// // ─── Deck Helpers ────────────────────────────────────────────────────
+// const COLORS = ["red", "blue", "green", "yellow"] as const;
+// const NUMBERS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+// const ACTIONS = ["skip", "reverse", "draw2"];
+// const WILDS = ["wild", "wild_draw4"];
+// const BOT_DIFFICULTY = {
+//   aggressive: {
+//     propertyBuffer: 50,
+//     upgradeBuffer: 100,
+//     gambleChance: 0.6,
+//     savingsBuffer: 200, // NEW — cash kept on hand before banking
+//     savingsRate: 0.2, // NEW — % of spare cash banked per turn
+//     stockBuffer: 150, // NEW — cash kept on hand before investing
+//     stockSpendRate: 0.5, // NEW — % of spare cash invested per turn
+//     preferHighVolatility: true, // NEW — risk appetite when picking a stock
+//   },
+//   conservative: {
+//     propertyBuffer: 150,
+//     upgradeBuffer: 300,
+//     gambleChance: 0.15,
+//     savingsBuffer: 100, // NEW
+//     savingsRate: 0.5, // NEW — conservative bots love a safe 2%
+//     stockBuffer: 300, // NEW
+//     stockSpendRate: 0.2, // NEW
+//     preferHighVolatility: false, // NEW
+//   },
+// } as const;
+
+// type BotDifficulty = keyof typeof BOT_DIFFICULTY;
+// function difficultyOf(bot: { difficulty?: BotDifficulty }): BotDifficulty {
+//   return bot.difficulty ?? "conservative";
+// }
+// function nextUpgradeFor(prop: { price: number; upgrades?: string[] }) {
+//   const owned = prop.upgrades ?? [];
+//   if (owned.length >= PROPERTY_UPGRADES.length) return null;
+//   return PROPERTY_UPGRADES[owned.length];
+// }
+// function makeInstanceId() {
+//   return `prop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+// }
+// function lifeEvent(cardId: string) {
+//   return LIFE_EVENTS.find((e) => e.id === cardId);
+// }
+// function propertyDef(cardId: string) {
+//   return PROPERTIES.find((p) => p.id === cardId);
+// }
+// function wealthOf(
+//   p: {
+//     money?: number;
+//     properties?: { value: number }[];
+//     savings?: number;
+//     shares?: { stockId: string; quantity: number; avgCost: number }[];
+//   },
+//   priceById: Map<string, number>,
+// ) {
+//   const propertyValue = (p.properties ?? []).reduce((s, pr) => s + pr.value, 0);
+//   const sharesValue = (p.shares ?? []).reduce(
+//     (s, h) => s + (priceById.get(h.stockId) ?? h.avgCost) * h.quantity,
+//     0,
+//   );
+//   return (p.money ?? 0) + propertyValue + (p.savings ?? 0) + sharesValue;
+// }
+
+// function priceMapOf(game: { stockPrices?: { id: string; price: number }[] }) {
+//   return new Map((game.stockPrices ?? []).map((p) => [p.id, p.price]));
+// }
+
+// export function createDeck(): string[] {
+//   const deck: string[] = [];
+//   for (const color of COLORS) {
+//     deck.push(`${color}_0`);
+//     for (const num of [...NUMBERS.slice(1), ...ACTIONS]) {
+//       deck.push(`${color}_${num}`, `${color}_${num}`);
+//     }
+//   }
+//   for (const wild of WILDS) {
+//     for (let i = 0; i < 4; i++) deck.push(wild);
+//   }
+//   // Two of each life event, one of each property --- enough to matter without
+//   // drowning out the normal Uno mechanics.
+//   for (const event of LIFE_EVENTS) {
+//     deck.push(event.id, event.id);
+//   }
+//   // Multiple copies per property, weighted so cheaper ones turn up more
+//   // often --- a starter apartment should show up early and regularly, while
+//   // the mansion stays a rarer late-game jackpot.
+//   const PROPERTY_COPIES = [4, 3, 3, 2, 2]; // apartment, house, condo, hotel, mansion
+//   PROPERTIES.forEach((prop, i) => {
+//     const copies = PROPERTY_COPIES[i] ?? 2;
+//     for (let c = 0; c < copies; c++) deck.push(prop.id);
+//   });
+//   return shuffle(deck);
+// }
+// // The Gamble stack is a completely separate deck from the main Uno deck ---
+// // it never gets shuffled in with numbers/actions/wilds, and drawing from it
+// // is never forced. This just builds/reshuffles the catalog into a random
+// // order.
+// export function createGambleDeck(): string[] {
+//   return shuffle(GAMBLE_EVENTS.map((g) => g.id));
+// }
+// function shuffle<T>(array: T[]): T[] {
+//   const arr = [...array];
+//   for (let i = arr.length - 1; i > 0; i--) {
+//     const j = Math.floor(Math.random() * (i + 1));
+//     [arr[i], arr[j]] = [arr[j], arr[i]];
+//   }
+//   return arr;
+// }
+// interface ResolvedDraw {
+//   deck: string[];
+//   discardPile: string[];
+//   keep: string[];
+//   lifeEvents: { id: string; label: string; amount: number }[];
+//   propertyOffers: { id: string; name: string; price: number; value: number }[];
+// }
+// function drawAndResolve(
+//   count: number,
+//   deckIn: string[],
+//   discardIn: string[],
+// ): ResolvedDraw {
+//   let deck = [...deckIn];
+//   let discardPile = [...discardIn];
+//   const keep: string[] = [];
+//   const lifeEvents: ResolvedDraw["lifeEvents"] = [];
+//   const propertyOffers: ResolvedDraw["propertyOffers"] = [];
+//   for (let n = 0; n < count; n++) {
+//     if (deck.length === 0) {
+//       if (discardPile.length <= 1) break; // nothing left to reshuffle
+//       const top = discardPile.pop()!;
+//       deck = shuffle(discardPile);
+//       discardPile = [top];
+//     }
+//     const cardId = deck.shift();
+//     if (!cardId) break;
+//     const life = lifeEvent(cardId);
+//     const prop = propertyDef(cardId);
+//     if (life) {
+//       lifeEvents.push({ id: life.id, label: life.label, amount: life.amount });
+//     } else if (prop) {
+//       propertyOffers.push({
+//         id: prop.id,
+//         name: prop.label,
+//         price: prop.price,
+//         value: prop.value,
+//       });
+//     } else {
+//       keep.push(cardId);
+//     }
+//   }
+//   return { deck, discardPile, keep, lifeEvents, propertyOffers };
+// }
+// // Deals a hand of exactly `count` *playable* cards to a fresh player at game
+// // start. Unlike a mid-game draw, life/property cards hit during the deal are
+// // NOT resolved --- no money is paid/charged and no offer is queued. They're
+// // just skipped over and replaced with the next card, so every player starts
+// // with an identical $3000 regardless of how the shuffle fell. Applying a
+// // random bonus/bill before anyone has taken a single turn would be an unfair
+// // coin flip, not gameplay.
+// function dealInitialHand(
+//   count: number,
+//   deckIn: string[],
+// ): {
+//   deck: string[];
+//   hand: string[];
+// } {
+//   const deck = [...deckIn];
+//   const hand: string[] = [];
+//   // Life/property cards hit during the deal are set aside, NOT destroyed ---
+//   // they get pushed back onto the deck once the hand is filled so they're
+//   // still in play for later draws.
+//   const setAside: string[] = [];
+//   while (hand.length < count && deck.length > 0) {
+//     const cardId = deck.shift()!;
+//     if (lifeEvent(cardId) || propertyDef(cardId)) {
+//       setAside.push(cardId);
+//       continue;
+//     }
+//     hand.push(cardId);
+//   }
+//   return { deck: [...deck, ...setAside], hand };
+// }
+// // ─── Salary: every 8th turn *per player* (a 7-day week, then payday --- "next
+// // Monday") --- everyone still in the game gets paid. Amount grows a little
+// // each payday instead of staying flat at $200. Savings interest is paid out
+// // on the same beat --- see paySalaryIfDue below. ───────────────────────────
+// const SALARY_INTERVAL = 8;
+// const SALARY_BASE = 500; // salary on the very first payday
+// const SALARY_GROWTH_PER_PAYDAY = 50; // flat increase each payday after that
+// const SAVINGS_INTEREST_RATE = 0.02; // 2% of savings, paid out every payday
+// const RENT_PERCENTAGE = 0.17;
+// const RENT_MIN_PROPERTIES = 2;
+// function calculateRent(
+//   properties: { price: number; invested?: number }[] | undefined,
+// ): number {
+//   if (!properties || properties.length < RENT_MIN_PROPERTIES) return 0;
+//   const combinedInvested = properties.reduce(
+//     (s, pr) => s + (pr.invested ?? pr.price),
+//     0,
+//   );
+//   return Math.round(combinedInvested * RENT_PERCENTAGE);
+// }
+// async function paySalaryIfDue(
+//   ctx: MutationCtx,
+//   roomId: Id<"rooms">,
+//   newTurnCount: number,
+// ): Promise<
+//   | {
+//       turnCount: number;
+//       amount: number;
+//       rentByPlayer: { userId: string; amount: number }[];
+//       interestByPlayer: { userId: string; amount: number }[];
+//       at: number;
+//     }
+//   | undefined
+// > {
+//   const allPlayers = await ctx.db
+//     .query("players")
+//     .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//     .collect();
+//   const numPlayers = allPlayers.length || 1;
+//   const scaledInterval = SALARY_INTERVAL * numPlayers;
+//   if (newTurnCount === 0 || newTurnCount % scaledInterval !== 0) {
+//     return undefined;
+//   }
+//   // Which payday is this? 1st, 2nd, 3rd... --- used to scale the amount up
+//   // a little each time so the salary keeps pace as the game (and property
+//   // prices) get bigger later on.
+//   const paydayNumber = newTurnCount / scaledInterval;
+//   const salaryAmount =
+//     SALARY_BASE + (paydayNumber - 1) * SALARY_GROWTH_PER_PAYDAY;
+//   const rentByPlayer: { userId: string; amount: number }[] = [];
+//   const interestByPlayer: { userId: string; amount: number }[] = [];
+//   // AFTER
+//   for (const p of allPlayers) {
+//     const rent = calculateRent(p.properties);
+//     const savings = p.savings ?? 0;
+//     const interest = Math.round(savings * SAVINGS_INTEREST_RATE);
+//     await ctx.db.patch(p._id, {
+//       money: (p.money ?? 0) + salaryAmount + rent,
+//       savings: savings + interest,
+//     });
+//     if (rent > 0) {
+//       rentByPlayer.push({ userId: p.userId, amount: rent });
+//     }
+//     if (interest > 0) {
+//       interestByPlayer.push({ userId: p.userId, amount: interest });
+//     }
+//   }
+//   // ─── Stock market additions ───────────────────────────────────────
+//   // Fluctuate share prices once per payday, same beat as salary/rent/
+//   // interest above. See convex/stocks.ts's fluctuatePrices for the
+//   // actual random-walk logic and stockMarketNotice broadcast — this is
+//   // just the wiring so it actually fires. Run in the same transaction
+//   // as the payout itself (not scheduled) so the new prices are already
+//   // live by the time clients see the new turnCount.
+//   await ctx.runMutation(internal.stocks.fluctuatePrices, {
+//     roomId,
+//     turnCount: newTurnCount,
+//   });
+//   // NEW — write the "pending" coach placeholder synchronously, in this
+//   // SAME transaction as the payday itself, before the generation action
+//   // is even scheduled. This is what closes the race: by the time the
+//   // client sees the new turnCount, coachCommentary.turnCount already
+//   // matches it with status "pending", so getCommentary never has a
+//   // window where it looks like "not a coach week" while the coach is
+//   // actually just about to start. paySalaryIfDue doesn't otherwise have
+//   // the game doc in scope, so fetch its _id here.
+//   const game = await ctx.db
+//     .query("games")
+//     .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//     .first();
+//   if (game) {
+//     await ctx.db.patch(game._id, {
+//       coachCommentary: {
+//         text: "",
+//         status: "pending",
+//         turnCount: newTurnCount,
+//         at: Date.now(),
+//       },
+//     });
+//   }
+//   await ctx.scheduler.runAfter(0, internal.coach.generateWeeklyCommentary, {
+//     roomId,
+//   });
+//   return {
+//     turnCount: newTurnCount,
+//     amount: salaryAmount,
+//     rentByPlayer,
+//     interestByPlayer,
+//     at: Date.now(),
+//   };
+// }
+// function resolveBotPropertyOffers(
+//   startingMoney: number,
+//   offers: { id: string; name: string; price: number; value: number }[],
+//   difficulty: BotDifficulty = "conservative",
+// ): {
+//   money: number;
+//   properties: {
+//     id: string;
+//     name: string;
+//     price: number;
+//     value: number;
+//     instanceId: string;
+//     invested: number;
+//     upgrades: string[];
+//   }[];
+// } {
+//   const { propertyBuffer } = BOT_DIFFICULTY[difficulty];
+//   let money = startingMoney;
+//   const properties: {
+//     id: string;
+//     name: string;
+//     price: number;
+//     value: number;
+//     instanceId: string;
+//     invested: number;
+//     upgrades: string[];
+//   }[] = [];
+//   for (const offer of offers) {
+//     if (money - offer.price >= propertyBuffer) {
+//       money -= offer.price;
+//       properties.push({
+//         instanceId: makeInstanceId(),
+//         id: offer.id,
+//         name: offer.name,
+//         price: offer.price,
+//         value: offer.value,
+//         invested: offer.price,
+//         upgrades: [],
+//       });
+//     }
+//   }
+//   return { money, properties };
+// }
+// type BotProperty = ReturnType<
+//   typeof resolveBotPropertyOffers
+// >["properties"][number];
+// export function parseCard(cardId: string): { color: string; value: string } {
+//   if (cardId === "wild" || cardId === "wild_draw4")
+//     return { color: "wild", value: cardId };
+//   if (lifeEvent(cardId)) return { color: "life", value: cardId };
+//   if (propertyDef(cardId)) return { color: "property", value: cardId };
+//   const idx = cardId.indexOf("_");
+//   if (idx === -1) return { color: "wild", value: cardId };
+//   return { color: cardId.slice(0, idx), value: cardId.slice(idx + 1) };
+// }
+// export function canPlayCard(
+//   card: string,
+//   topCard: string,
+//   currentColor: string,
+// ): boolean {
+//   const { color, value } = parseCard(card);
+//   const { value: topValue } = parseCard(topCard);
+//   // Wild, life-event, and property cards are all playable regardless of the
+//   // current color or top card.
+//   if (color === "wild" || color === "life" || color === "property") return true;
+//   if (color === currentColor) return true;
+//   if (value === topValue) return true;
+//   return false;
+// }
+// function isStackableDrawCard(cardId: string): boolean {
+//   const { value } = parseCard(cardId);
+//   return value === "draw2" || cardId === "wild_draw4";
+// }
+// // ─── Bot trading ────────────────────────────────────────────────────────
+// // Runs once per bot turn, before the bot decides what to play. Two jobs:
+// //   1. Respond to any trades other players have sent to this bot --- accept
+// //      only if the deal nets the bot a modest premium, decline otherwise.
+// //   2. Occasionally propose a new trade of its own, offering cash for the
+// //      priciest property an opponent owns.
+// async function resolveBotTradeOffers(
+//   ctx: MutationCtx,
+//   roomId: Id<"rooms">,
+//   bot: Doc<"players">,
+// ): Promise<{ money: number; properties: BotProperty[]; label: string | null }> {
+//   let money = bot.money ?? 0;
+//   let properties: BotProperty[] = bot.properties ?? [];
+//   let label: string | null = null;
+//   const incoming = await ctx.db
+//     .query("trades")
+//     .withIndex("by_to_user", (q) => q.eq("toUserId", bot.userId))
+//     .collect();
+//   for (const trade of incoming) {
+//     if (trade.roomId !== roomId || trade.status !== "pending") continue;
+//     const fromPlayer = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", trade.fromUserId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!fromPlayer) continue;
+//     const offeredProps = (fromPlayer.properties ?? []).filter((p) =>
+//       trade.offerPropertyIds.includes(p.instanceId),
+//     );
+//     const requestedProps = properties.filter((p) =>
+//       trade.requestPropertyIds.includes(p.instanceId),
+//     );
+//     // Ownership may have shifted since the offer went out --- skip if either
+//     // side no longer actually holds what the trade references.
+//     if (
+//       offeredProps.length !== trade.offerPropertyIds.length ||
+//       requestedProps.length !== trade.requestPropertyIds.length
+//     ) {
+//       continue;
+//     }
+//     const gain =
+//       trade.offerCash + offeredProps.reduce((s, p) => s + p.value, 0);
+//     const cost =
+//       trade.requestCash + requestedProps.reduce((s, p) => s + p.value, 0);
+//     const canAfford = trade.requestCash <= money;
+//     // Bots only accept trades that net them a modest premium --- keeps them
+//     // from getting fleeced by lopsided offers.
+//     const accept = canAfford && gain >= cost * 1.05;
+//     await ctx.db.patch(trade._id, {
+//       status: accept ? "accepted" : "declined",
+//       resolvedAt: Date.now(),
+//     });
+//     if (accept) {
+//       properties = [
+//         ...properties.filter(
+//           (p) => !trade.requestPropertyIds.includes(p.instanceId),
+//         ),
+//         ...offeredProps,
+//       ];
+//       money = money - trade.requestCash + trade.offerCash;
+//       await ctx.db.patch(fromPlayer._id, {
+//         money: (fromPlayer.money ?? 0) - trade.offerCash + trade.requestCash,
+//         properties: [
+//           ...(fromPlayer.properties ?? []).filter(
+//             (p) => !trade.offerPropertyIds.includes(p.instanceId),
+//           ),
+//           ...requestedProps,
+//         ],
+//       });
+//       label = `🤝 ${bot.name} accepted ${trade.fromName}'s trade offer`;
+//     }
+//   }
+//   return { money, properties, label };
+// }
+// async function maybeProposeBotTrade(
+//   ctx: MutationCtx,
+//   roomId: Id<"rooms">,
+//   bot: Doc<"players">,
+//   money: number,
+//   difficulty: BotDifficulty,
+// ): Promise<string | null> {
+//   if (Math.random() > 0.25) return null; // don't spam an offer every turn
+//   const existingOutgoing = await ctx.db
+//     .query("trades")
+//     .withIndex("by_from_user", (q) => q.eq("fromUserId", bot.userId))
+//     .collect();
+//   if (
+//     existingOutgoing.some((t) => t.roomId === roomId && t.status === "pending")
+//   ) {
+//     return null;
+//   }
+//   const others = (
+//     await ctx.db
+//       .query("players")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .collect()
+//   ).filter((p) => p.userId !== bot.userId);
+//   const { propertyBuffer } = BOT_DIFFICULTY[difficulty];
+//   for (const opponent of shuffle(others)) {
+//     const opponentProps = opponent.properties ?? [];
+//     if (opponentProps.length === 0) continue;
+//     const target = [...opponentProps].sort((a, b) => b.value - a.value)[0];
+//     // Aggressive bots overpay a bit to close the deal; conservative bots lowball.
+//     const offerCash =
+//       difficulty === "aggressive"
+//         ? Math.round(target.value * 1.1)
+//         : Math.round(target.value * 0.85);
+//     if (offerCash > money || money - offerCash < propertyBuffer) continue;
+//     await ctx.db.insert("trades", {
+//       roomId,
+//       fromUserId: bot.userId,
+//       fromName: bot.name,
+//       toUserId: opponent.userId,
+//       toName: opponent.name,
+//       offerPropertyIds: [],
+//       offerPropertyDetails: [],
+//       offerCash,
+//       requestPropertyIds: [target.instanceId],
+//       // Snapshot the property's {type id, name} so the recipient's trade
+//       // popup can show its name and video instead of falling back to a
+//       // generic "1 property" — mirrors what proposeTrade already does for
+//       // human-initiated trades in Convex/trades.ts.
+//       requestPropertyDetails: [{ id: target.id, name: target.name }],
+//       requestCash: 0,
+//       status: "pending",
+//       createdAt: Date.now(),
+//     });
+//     return `🤝 ${bot.name} offered $${offerCash.toLocaleString()} to ${opponent.name} for ${target.name}`;
+//   }
+//   return null;
+// }
+// // ─── Queries ─────────────────────────────────────────────────────────
+// export const getGame = query({
+//   args: { roomId: v.id("rooms") },
+//   handler: async (ctx, { roomId }) => {
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (!game) return game;
+//     const rentByPlayer: Record<string, number> = {};
+//     for (const entry of game.salaryNotice?.rentByPlayer ?? []) {
+//       rentByPlayer[entry.userId] = entry.amount;
+//     }
+//     const interestByPlayer: Record<string, number> = {};
+//     for (const entry of game.salaryNotice?.interestByPlayer ?? []) {
+//       interestByPlayer[entry.userId] = entry.amount;
+//     }
+//     return {
+//       ...game,
+//       salaryNotice: game.salaryNotice
+//         ? { ...game.salaryNotice, rentByPlayer, interestByPlayer }
+//         : undefined,
+//     };
+//   },
+// });
+// export const getPlayerHand = query({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     return player?.hand ?? [];
+//   },
+// });
+// // ─── Start Game ────────────────────────────────────────────────────────
+// export const startGame = mutation({
+//   args: { roomId: v.id("rooms"), requesterId: v.string() },
+//   handler: async (ctx, { roomId, requesterId }) => {
+//     const room = await ctx.db.get(roomId);
+//     if (!room) throw new Error("Room not found");
+//     if (room.hostId !== requesterId) throw new Error("Only host can start");
+//     if (room.playerIds.length < 2) throw new Error("Need at least 2 players");
+//     const players = await ctx.db
+//       .query("players")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .collect();
+//     const sortedPlayers = players.sort((a, b) => a.seatIndex - b.seatIndex);
+//     const playerOrder = sortedPlayers.map((p) => p.userId);
+//     let deck = createDeck();
+//     const hands: Record<string, string[]> = {};
+//     for (const player of sortedPlayers) {
+//       const dealt = dealInitialHand(7, deck);
+//       deck = dealt.deck;
+//       hands[player.userId] = dealt.hand;
+//     }
+//     let firstCard = deck.shift()!;
+//     while (
+//       firstCard.startsWith("wild") ||
+//       lifeEvent(firstCard) ||
+//       propertyDef(firstCard)
+//     ) {
+//       deck.push(firstCard);
+//       deck = shuffle(deck);
+//       firstCard = deck.shift()!;
+//     }
+//     const { color: firstColor } = parseCard(firstCard);
+//     for (const player of sortedPlayers) {
+//       await ctx.db.patch(player._id, {
+//         hand: hands[player.userId],
+//         // Fresh, EQUAL financial slate every game --- nobody starts richer or
+//         // poorer than anyone else.
+//         money: 3000,
+//         savings: 0,
+//         properties: [],
+//         pendingProperties: [],
+//         pendingLifeEvents: [],
+//         pendingGambleEvent: undefined,
+//         lastGambleTurn: undefined,
+//       });
+//     }
+//     await ctx.db.insert("games", {
+//       roomId,
+//       deck,
+//       // Only ever holds cards that were actually played --- never a resolved
+//       // life/property card, since its last entry is the visible "top card".
+//       discardPile: [firstCard],
+//       currentColor: firstColor,
+//       currentPlayerIndex: 0,
+//       playerOrder,
+//       direction: 1,
+//       drawStack: 0,
+//       turnCount: 0,
+//       lastAction: `Game started! ${firstCard} is the first card`,
+//       status: "active",
+//       createdAt: Date.now(),
+//       gambleDeck: createGambleDeck(),
+//     });
+//     await ctx.db.patch(roomId, { status: "playing" });
+//     const firstPlayerId = playerOrder[0];
+//     if (firstPlayerId.startsWith("bot_")) {
+//       await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//     }
+//   },
+// });
+// export const playCard = mutation({
+//   args: {
+//     roomId: v.id("rooms"),
+//     userId: v.string(),
+//     cardId: v.string(),
+//     chosenColor: v.optional(v.string()),
+//   },
+//   handler: async (ctx, { roomId, userId, cardId, chosenColor }) => {
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (!game || game.status !== "active") throw new Error("No active game");
+//     const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
+//     if (currentPlayerId !== userId) throw new Error("Not your turn");
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     const topCard = game.discardPile[game.discardPile.length - 1];
+//     if (!canPlayCard(cardId, topCard, game.currentColor)) {
+//       throw new Error("Cannot play that card");
+//     }
+//     // ── Penalty stack enforcement ─────────────────────────────────────────
+//     // Either a +2 or a +4 can be stacked on top of either a +2 or a +4 ---
+//     // players can freely escalate or pass the penalty back and forth.
+//     if (game.drawStack > 0 && !isStackableDrawCard(cardId)) {
+//       throw new Error("You must play a +2 or +4 to stack, or draw!");
+//     }
+//     // ─────────────────────────────────────────────────────────────────────
+//     const cardIdx = player.hand.indexOf(cardId);
+//     if (cardIdx === -1) throw new Error("Card not in hand");
+//     const handCopy = [...player.hand];
+//     handCopy.splice(cardIdx, 1);
+//     const parsedCard = parseCard(cardId);
+//     // ── Standard turn-advance mechanics (skip/reverse/draw2/wild/etc.) ────
+//     const newColor =
+//       parsedCard.color === "wild" ? (chosenColor ?? "red") : parsedCard.color;
+//     let newDirection = game.direction;
+//     let nextIndex = game.currentPlayerIndex;
+//     let newDrawStack = game.drawStack;
+//     let lastAction = `${player.name} played ${cardId}`;
+//     const numPlayers = game.playerOrder.length;
+//     if (parsedCard.value === "reverse") {
+//       newDirection = game.direction * -1;
+//       nextIndex =
+//         numPlayers === 2
+//           ? (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers
+//           : (nextIndex + newDirection + numPlayers) % numPlayers;
+//       lastAction += " --- Direction reversed!";
+//     } else if (parsedCard.value === "skip") {
+//       nextIndex = (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers;
+//       lastAction += " --- Next player skipped!";
+//     } else if (parsedCard.value === "draw2") {
+//       newDrawStack += 2;
+//       nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
+//       lastAction += ` --- Next player must draw ${newDrawStack}!`;
+//     } else if (cardId === "wild_draw4") {
+//       newDrawStack += 4;
+//       nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
+//       lastAction += ` --- Next player must draw ${newDrawStack} and color is ${newColor}!`;
+//     } else {
+//       nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
+//     }
+//     if (parsedCard.value !== "draw2" && cardId !== "wild_draw4") {
+//       newDrawStack = 0;
+//     }
+//     if (cardId === "wild") lastAction += ` --- Color changed to ${newColor}!`;
+//     const newTurnCount = (game.turnCount ?? 0) + 1;
+//     // ── Check for "going out" --- but only a win if you're the wealthiest ───
+//     if (handCopy.length === 0) {
+//       const allPlayers = await ctx.db
+//         .query("players")
+//         .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//         .collect();
+//       const priceById = priceMapOf(game);
+//       const myWealth = wealthOf(player, priceById);
+//       const otherWealths = allPlayers
+//         .filter((p) => p.userId !== userId)
+//         .map((p) => wealthOf(p, priceById));
+//       const maxOtherWealth =
+//         otherWealths.length > 0 ? Math.max(...otherWealths) : -Infinity;
+//       const eligibleToWin = myWealth >= maxOtherWealth;
+//       if (eligibleToWin) {
+//         await ctx.db.patch(player._id, { hand: [] });
+//         await ctx.db.patch(game._id, {
+//           discardPile: [...game.discardPile, cardId],
+//           winnerId: userId,
+//           status: "finished",
+//           lastAction: `🎉 ${player.name} went out with $${myWealth.toLocaleString()} in total wealth --- the richest player --- and WINS!`,
+//         });
+//         await ctx.db.patch(roomId, { status: "finished" });
+//         return {
+//           outcome: "won" as const,
+//           myWealth,
+//           maxOtherWealth: otherWealths.length > 0 ? maxOtherWealth : 0,
+//         };
+//       }
+//       // Not the wealthiest --- blocked from winning. Draw 2 penalty cards
+//       // (resolved through the same life/property pipeline as any draw) and
+//       // stay in the game.
+//       const resolved = drawAndResolve(2, game.deck, [
+//         ...game.discardPile,
+//         cardId,
+//       ]);
+//       const lifeMoneyDelta = resolved.lifeEvents.reduce(
+//         (s, e) => s + e.amount,
+//         0,
+//       );
+//       await ctx.db.patch(player._id, {
+//         hand: [...handCopy, ...resolved.keep],
+//         money: (player.money ?? 0) + lifeMoneyDelta,
+//         pendingProperties: [
+//           ...(player.pendingProperties ?? []),
+//           ...resolved.propertyOffers,
+//         ],
+//         pendingLifeEvents: [
+//           ...(player.pendingLifeEvents ?? []),
+//           ...resolved.lifeEvents,
+//         ],
+//       });
+//       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
+//       await ctx.db.patch(game._id, {
+//         deck: resolved.deck,
+//         discardPile: resolved.discardPile,
+//         currentColor: newColor,
+//         currentPlayerIndex: nextIndex,
+//         direction: newDirection,
+//         drawStack: newDrawStack,
+//         turnCount: newTurnCount,
+//         ...(salaryNotice ? { salaryNotice } : {}),
+//         lastAction: `${player.name} went out but only has $${myWealth.toLocaleString()} --- not the richest player! Forced to draw 2 and stay in the game.`,
+//       });
+//       const nextPlayerId = game.playerOrder[nextIndex];
+//       if (nextPlayerId.startsWith("bot_")) {
+//         await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//       }
+//       return {
+//         outcome: "blocked" as const,
+//         myWealth,
+//         maxOtherWealth,
+//       };
+//     }
+//     await ctx.db.patch(player._id, { hand: handCopy });
+//     const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
+//     await ctx.db.patch(game._id, {
+//       discardPile: [...game.discardPile, cardId],
+//       currentColor: newColor,
+//       currentPlayerIndex: nextIndex,
+//       direction: newDirection,
+//       drawStack: newDrawStack,
+//       turnCount: newTurnCount,
+//       ...(salaryNotice ? { salaryNotice } : {}),
+//       lastAction,
+//     });
+//     const nextPlayerId = game.playerOrder[nextIndex];
+//     if (nextPlayerId.startsWith("bot_")) {
+//       await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//     }
+//     return { outcome: "played" as const };
+//   },
+// });
+// export const respondProperty = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string(), accept: v.boolean() },
+//   handler: async (ctx, { roomId, userId, accept }) => {
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     const queue = player.pendingProperties ?? [];
+//     const offer = queue[0];
+//     if (!offer) throw new Error("No pending property offer");
+//     const restQueue = queue.slice(1);
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (accept) {
+//       // ── CHANGED: throw instead of silently auto-declining. Leaving the
+//       // offer in the queue (no patch happens here) means the modal stays
+//       // open --- the player can decline it themselves, or just close the
+//       // toast and wait for more cash before accepting later. Throwing is
+//       // what lets the client's catch block actually fire a toast.
+//       if ((player.money ?? 0) < offer.price) {
+//         throw new Error(
+//           `Sorry, you don't have enough money for ${offer.name} --- you need $${offer.price.toLocaleString()} but only have $${(player.money ?? 0).toLocaleString()}. Earn some more first!`,
+//         );
+//       }
+//       await ctx.db.patch(player._id, {
+//         money: (player.money ?? 0) - offer.price,
+//         properties: [
+//           ...(player.properties ?? []),
+//           {
+//             instanceId: makeInstanceId(),
+//             id: offer.id,
+//             name: offer.name,
+//             price: offer.price,
+//             value: offer.value,
+//             invested: offer.price,
+//             upgrades: [],
+//           },
+//         ],
+//         pendingProperties: restQueue,
+//       });
+//       if (game) {
+//         await ctx.db.patch(game._id, {
+//           lastAction: `🏠 ${player.name} bought ${offer.name} for $${offer.price.toLocaleString()} (worth $${offer.value.toLocaleString()})!`,
+//         });
+//       }
+//     } else {
+//       await ctx.db.patch(player._id, { pendingProperties: restQueue });
+//       if (game) {
+//         await ctx.db.patch(game._id, {
+//           lastAction: `${player.name} declined to buy ${offer.name}.`,
+//         });
+//       }
+//     }
+//   },
+// });
+// export const upgradeProperty = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string(), instanceId: v.string() },
+//   handler: async (ctx, { roomId, userId, instanceId }) => {
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     const properties = player.properties ?? [];
+//     const idx = properties.findIndex((p) => p.instanceId === instanceId);
+//     if (idx === -1) throw new Error("You don't own that property");
+//     const prop = properties[idx];
+//     const upgrade = nextUpgradeFor(prop);
+//     if (!upgrade) throw new Error("This property is already fully upgraded");
+//     const cost = Math.round(prop.price * upgrade.costMultiplier);
+//     const valueGain = Math.round(prop.price * upgrade.valueMultiplier);
+//     if ((player.money ?? 0) < cost) {
+//       throw new Error(
+//         `You need $${cost.toLocaleString()} for ${upgrade.label}`,
+//       );
+//     }
+//     const updatedProperties = [...properties];
+//     updatedProperties[idx] = {
+//       ...prop,
+//       value: prop.value + valueGain,
+//       invested: (prop.invested ?? prop.price) + cost,
+//       upgrades: [...(prop.upgrades ?? []), upgrade.id],
+//     };
+//     await ctx.db.patch(player._id, {
+//       money: (player.money ?? 0) - cost,
+//       properties: updatedProperties,
+//     });
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (game) {
+//       await ctx.db.patch(game._id, {
+//         lastAction: `${upgrade.emoji} ${player.name} added ${upgrade.label} to ${prop.name} (+$${valueGain.toLocaleString()} value)!`,
+//       });
+//     }
+//     return { newValue: updatedProperties[idx].value, cost, valueGain };
+//   },
+// });
+// // ─── Acknowledge Life Events ───────────────────────────────────────────────
+// // The money from a "life" card is applied the instant it's drawn --- this
+// // mutation just clears the queue once the player has seen the "you got/owed
+// // $X" modal, so it doesn't pop up again.
+// export const acknowledgeLifeEvents = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     await ctx.db.patch(player._id, { pendingLifeEvents: [] });
+//   },
+// });
+// // ─── Gamble Stack: pull a card ──────────────────────────────────────────
+// // Purely elective, purely on your own turn, and never ends your turn ---
+// // you still have to play a card or draw from the main pile afterward to
+// // actually pass play. Limited to one pull per own turn via lastGambleTurn,
+// // so it can't be spammed for free money before you act.
+// export const drawGambleCard = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (!game || game.status !== "active") throw new Error("No active game");
+//     const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
+//     if (currentPlayerId !== userId) throw new Error("Not your turn");
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     const turnCount = game.turnCount ?? 0;
+//     if ((player.lastGambleTurn ?? -1) === turnCount) {
+//       throw new Error("You've already tried your luck this turn!");
+//     }
+//     let gambleDeck = [...(game.gambleDeck ?? [])];
+//     if (gambleDeck.length === 0) {
+//       gambleDeck = createGambleDeck();
+//     }
+//     const cardId = gambleDeck.shift()!;
+//     const def = gambleDef(cardId);
+//     if (!def) throw new Error("Unknown gamble card");
+//     const moneyBefore = player.money ?? 0;
+//     const appliedAmount = def.wipeOut ? -moneyBefore : (def.amount ?? 0);
+//     const newMoney = def.wipeOut ? 0 : moneyBefore + appliedAmount;
+//     await ctx.db.patch(player._id, {
+//       money: newMoney,
+//       lastGambleTurn: turnCount,
+//       pendingGambleEvent: {
+//         id: def.id,
+//         label: def.label,
+//         description: def.description,
+//         amount: appliedAmount,
+//         wipeOut: def.wipeOut,
+//         jackpot: def.jackpot,
+//       },
+//     });
+//     await ctx.db.patch(game._id, {
+//       gambleDeck,
+//       lastAction: `🎲 ${player.name} tried their luck: ${def.label}!`,
+//     });
+//   },
+// });
+// export const acknowledgeGambleEvent = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     await ctx.db.patch(player._id, { pendingGambleEvent: undefined });
+//   },
+// });
+// // ─── Draw Card ───────────────────────────────────────────────────────────
+// export const drawCard = mutation({
+//   args: { roomId: v.id("rooms"), userId: v.string() },
+//   handler: async (ctx, { roomId, userId }) => {
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (!game || game.status !== "active") throw new Error("No active game");
+//     const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
+//     if (currentPlayerId !== userId) throw new Error("Not your turn");
+//     const player = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", userId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!player) throw new Error("Player not found");
+//     const drawCount = game.drawStack > 0 ? game.drawStack : 1;
+//     const resolved = drawAndResolve(drawCount, game.deck, game.discardPile);
+//     const lifeMoneyDelta = resolved.lifeEvents.reduce(
+//       (s, e) => s + e.amount,
+//       0,
+//     );
+//     await ctx.db.patch(player._id, {
+//       hand: [...player.hand, ...resolved.keep],
+//       money: (player.money ?? 0) + lifeMoneyDelta,
+//       pendingProperties: [
+//         ...(player.pendingProperties ?? []),
+//         ...resolved.propertyOffers,
+//       ],
+//       pendingLifeEvents: [
+//         ...(player.pendingLifeEvents ?? []),
+//         ...resolved.lifeEvents,
+//       ],
+//     });
+//     const numPlayers = game.playerOrder.length;
+//     const nextIndex =
+//       (game.currentPlayerIndex + game.direction + numPlayers) % numPlayers;
+//     const newTurnCount = (game.turnCount ?? 0) + 1;
+//     const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
+//     await ctx.db.patch(game._id, {
+//       deck: resolved.deck,
+//       discardPile: resolved.discardPile,
+//       drawStack: 0,
+//       currentPlayerIndex: nextIndex,
+//       turnCount: newTurnCount,
+//       ...(salaryNotice ? { salaryNotice } : {}),
+//       lastAction: `${player.name} drew ${drawCount} card${drawCount > 1 ? "s" : ""}`,
+//     });
+//     const nextPlayerId = game.playerOrder[nextIndex];
+//     if (nextPlayerId.startsWith("bot_")) {
+//       await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//     }
+//   },
+// });
+// export const botTurn = internalMutation({
+//   args: { roomId: v.id("rooms") },
+//   handler: async (ctx, { roomId }) => {
+//     const game = await ctx.db
+//       .query("games")
+//       .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//       .first();
+//     if (!game || game.status !== "active") return;
+//     const botId = game.playerOrder[game.currentPlayerIndex];
+//     if (!botId.startsWith("bot_")) return;
+//     const bot = await ctx.db
+//       .query("players")
+//       .withIndex("by_user_room", (q) =>
+//         q.eq("userId", botId).eq("roomId", roomId),
+//       )
+//       .first();
+//     if (!bot) return;
+//     const difficulty = difficultyOf(bot);
+//     const turnCount = game.turnCount ?? 0;
+//     let botMoney = bot.money ?? 0;
+//     let gambleDeck = [...(game.gambleDeck ?? [])];
+//     let gambleLastAction: string | null = null;
+//     let gamblePulled = false;
+//     let botGambleNotice: {
+//       botName: string;
+//       label: string;
+//       description: string;
+//       amount: number;
+//       wipeOut: boolean;
+//       jackpot: boolean;
+//       at: number;
+//     } | null = null;
+//     if (
+//       (bot.lastGambleTurn ?? -1) !== turnCount &&
+//       Math.random() < BOT_DIFFICULTY[difficulty].gambleChance
+//     ) {
+//       if (gambleDeck.length === 0) gambleDeck = createGambleDeck();
+//       const cardId = gambleDeck.shift()!;
+//       const def = gambleDef(cardId);
+//       if (def) {
+//         const appliedAmount = def.wipeOut ? -botMoney : (def.amount ?? 0);
+//         botMoney = def.wipeOut ? 0 : botMoney + appliedAmount;
+//         gambleLastAction = `🎲 ${bot.name} tried their luck: ${def.label}!`;
+//         gamblePulled = true;
+//         botGambleNotice = {
+//           botName: bot.name,
+//           label: def.label,
+//           description: def.description,
+//           amount: appliedAmount,
+//           wipeOut: def.wipeOut,
+//           jackpot: def.jackpot,
+//           at: Date.now(),
+//         };
+//       }
+//     }
+//     // Property upgrade, at most one per turn, before the bot decides what
+//     // to play (so a payday-fresh bot can immediately reinvest).
+//     const upgradeResult = resolveBotUpgrade(
+//       botMoney,
+//       bot.properties ?? [],
+//       difficulty,
+//     );
+
+//     botMoney = upgradeResult.money;
+//     let botProperties = upgradeResult.properties;
+//     const upgradeLastAction = upgradeResult.label;
+//     // NEW — Trading: respond to any offers sent to this bot, then maybe
+//     // propose one of its own. Runs after the upgrade step so a bot that
+//     // just cashed out on an upgrade decision has an accurate cash figure
+//     // to trade with.
+//     const tradeResult = await resolveBotTradeOffers(ctx, roomId, bot);
+//     botMoney = tradeResult.money;
+//     botProperties = tradeResult.properties;
+//     const proposeTradeLastAction = await maybeProposeBotTrade(
+//       ctx,
+//       roomId,
+//       bot,
+//       botMoney,
+//       difficulty,
+//     );
+//     const combinedPrefix = [
+//       gambleLastAction,
+//       upgradeLastAction,
+//       tradeResult.label,
+//       proposeTradeLastAction,
+//     ]
+//       .filter(Boolean)
+//       .join(" ");
+//     const topCard = game.discardPile[game.discardPile.length - 1];
+//     const drawStack = game.drawStack;
+//     const isPenaltyStackTurn = drawStack > 0;
+//     const playable = bot.hand.filter((card) => {
+//       if (!canPlayCard(card, topCard, game.currentColor)) return false;
+//       if (!isPenaltyStackTurn) return true;
+//       return isStackableDrawCard(card);
+//     });
+//     const newTurnCount = (game.turnCount ?? 0) + 1;
+//     if (playable.length > 0) {
+//       const card =
+//         playable.find((c) => parseCard(c).value.includes("draw")) ??
+//         playable.find((c) =>
+//           ["skip", "reverse"].includes(parseCard(c).value),
+//         ) ??
+//         playable[0];
+//       const { color } = parseCard(card);
+//       const chosenColor =
+//         color === "wild"
+//           ? (COLORS[Math.floor(Math.random() * 4)] as string)
+//           : color;
+//       const handCopy = [...bot.hand];
+//       handCopy.splice(handCopy.indexOf(card), 1);
+//       const parsedCard = parseCard(card);
+//       let botLastAction = `🤖 ${bot.name} played ${card}`;
+//       const newColor =
+//         parsedCard.color === "wild" ? chosenColor : parsedCard.color;
+//       let newDirection = game.direction;
+//       let nextIndex = game.currentPlayerIndex;
+//       let newDrawStack = game.drawStack;
+//       const numPlayers = game.playerOrder.length;
+//       if (parsedCard.value === "reverse") {
+//         newDirection *= -1;
+//         nextIndex =
+//           numPlayers === 2
+//             ? (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers
+//             : (nextIndex + newDirection + numPlayers) % numPlayers;
+//         botLastAction += " -- Direction reversed!";
+//       } else if (parsedCard.value === "skip") {
+//         nextIndex =
+//           (nextIndex + newDirection * 2 + numPlayers * 2) % numPlayers;
+//         botLastAction += " -- Next player skipped!";
+//       } else if (parsedCard.value === "draw2") {
+//         newDrawStack += 2;
+//         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
+//         botLastAction += ` -- Next player must draw ${newDrawStack}!`;
+//       } else if (card === "wild_draw4") {
+//         newDrawStack += 4;
+//         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
+//         botLastAction += ` -- Next player must draw ${newDrawStack} and color is ${newColor}!`;
+//       } else {
+//         nextIndex = (nextIndex + newDirection + numPlayers) % numPlayers;
+//       }
+//       if (parsedCard.value !== "draw2" && card !== "wild_draw4") {
+//         newDrawStack = 0;
+//       }
+//       if (card === "wild") botLastAction += ` -- Color changed to ${newColor}!`;
+//       // ── Check for "going out" -- wealth-gated, same as human players ──
+//       if (handCopy.length === 0) {
+//         const allPlayers = await ctx.db
+//           .query("players")
+//           .withIndex("by_room", (q) => q.eq("roomId", roomId))
+//           .collect();
+//         const priceById = priceMapOf(game);
+//         const myWealth = wealthOf(
+//           {
+//             money: botMoney,
+//             properties: botProperties,
+//             savings: bot.savings,
+//             shares: bot.shares,
+//           },
+//           priceById,
+//         );
+//         const otherWealths = allPlayers
+//           .filter((p) => p.userId !== botId)
+//           .map((p) => wealthOf(p, priceById));
+//         const maxOtherWealth =
+//           otherWealths.length > 0 ? Math.max(...otherWealths) : -Infinity;
+//         const eligibleToWin = myWealth >= maxOtherWealth;
+//         if (eligibleToWin) {
+//           await ctx.db.patch(bot._id, {
+//             hand: [],
+//             money: botMoney,
+//             properties: botProperties,
+//             ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
+//           });
+//           await ctx.db.patch(game._id, {
+//             discardPile: [...game.discardPile, card],
+//             gambleDeck,
+//             ...(botGambleNotice ? { botGambleNotice } : {}),
+//             winnerId: botId,
+//             status: "finished",
+//             lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}🤖🎉 ${bot.name} went out with $${myWealth.toLocaleString()} in total wealth -- the richest player -- and wins!`,
+//           });
+//           await ctx.db.patch(roomId, { status: "finished" });
+//           return;
+//         }
+
+//         // Blocked -- draw 2 (through the same life/property pipeline) and stay in.
+//         const resolved = drawAndResolve(2, game.deck, [
+//           ...game.discardPile,
+//           card,
+//         ]);
+//         const lifeMoneyDelta = resolved.lifeEvents.reduce(
+//           (s, e) => s + e.amount,
+//           0,
+//         );
+//         const { money: botMoneyAfterDraw, properties: botPropsAfterDraw } =
+//           resolveBotPropertyOffers(
+//             botMoney,
+//             resolved.propertyOffers,
+//             difficulty,
+//           );
+//         await ctx.db.patch(bot._id, {
+//           hand: [...handCopy, ...resolved.keep],
+//           money: botMoneyAfterDraw + lifeMoneyDelta,
+//           properties: [...botProperties, ...botPropsAfterDraw],
+//           ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
+//         });
+//         const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
+//         await ctx.db.patch(game._id, {
+//           deck: resolved.deck,
+//           discardPile: resolved.discardPile,
+//           currentColor: newColor,
+//           currentPlayerIndex: nextIndex,
+//           direction: newDirection,
+//           drawStack: newDrawStack,
+//           turnCount: newTurnCount,
+//           gambleDeck,
+//           ...(botGambleNotice ? { botGambleNotice } : {}),
+//           ...(salaryNotice ? { salaryNotice } : {}),
+//           lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}🤖 ${bot.name} went out but only has $${myWealth.toLocaleString()} -- not the richest! Forced to draw 2 and stay in the game.`,
+//         });
+//         const nextPlayerId = game.playerOrder[nextIndex];
+//         if (nextPlayerId.startsWith("bot_")) {
+//           await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//         }
+//         return;
+//       }
+//       await ctx.db.patch(bot._id, {
+//         hand: handCopy,
+//         money: botMoney,
+//         properties: botProperties,
+//         ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
+//       });
+//       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
+//       await ctx.db.patch(game._id, {
+//         discardPile: [...game.discardPile, card],
+//         currentColor: newColor,
+//         currentPlayerIndex: nextIndex,
+//         direction: newDirection,
+//         drawStack: newDrawStack,
+//         turnCount: newTurnCount,
+//         gambleDeck,
+//         ...(botGambleNotice ? { botGambleNotice } : {}),
+//         ...(salaryNotice ? { salaryNotice } : {}),
+//         lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}${botLastAction}`,
+//       });
+//       const nextPlayerId = game.playerOrder[nextIndex];
+//       if (nextPlayerId.startsWith("bot_")) {
+//         await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//       }
+//     } else {
+//       const drawCount = drawStack > 0 ? drawStack : 1;
+//       const resolved = drawAndResolve(drawCount, game.deck, game.discardPile);
+//       const lifeMoneyDelta = resolved.lifeEvents.reduce(
+//         (s, e) => s + e.amount,
+//         0,
+//       );
+//       const { money: botMoneyAfterDraw, properties: botPropsAfterDraw } =
+//         resolveBotPropertyOffers(botMoney, resolved.propertyOffers, difficulty);
+//       await ctx.db.patch(bot._id, {
+//         hand: [...bot.hand, ...resolved.keep],
+//         money: botMoneyAfterDraw + lifeMoneyDelta,
+//         properties: [...botProperties, ...botPropsAfterDraw],
+//         ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
+//       });
+//       const numPlayers = game.playerOrder.length;
+//       const nextIndex =
+//         (game.currentPlayerIndex + game.direction + numPlayers) % numPlayers;
+//       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
+//       await ctx.db.patch(game._id, {
+//         deck: resolved.deck,
+//         discardPile: resolved.discardPile,
+//         drawStack: 0,
+//         currentPlayerIndex: nextIndex,
+//         turnCount: newTurnCount,
+//         gambleDeck,
+//         ...(botGambleNotice ? { botGambleNotice } : {}),
+//         ...(salaryNotice ? { salaryNotice } : {}),
+//         lastAction: `${combinedPrefix ? combinedPrefix + " " : ""}🤖 ${bot.name} drew ${drawCount} card${drawCount > 1 ? "s" : ""}`,
+//       });
+//       const nextPlayerId = game.playerOrder[nextIndex];
+//       if (nextPlayerId.startsWith("bot_")) {
+//         await ctx.scheduler.runAfter(1500, internal.game.botTurn, { roomId });
+//       }
+//     }
+//   },
+// });
+// // ─── Game History ─────────────────────────────────────────────────────────
+// export const getFinishedGames = query({
+//   handler: async (ctx) => {
+//     return await ctx.db
+//       .query("games")
+//       .filter((q) => q.eq(q.field("status"), "finished"))
+//       .order("desc")
+//       .take(50);
+//   },
+// });
+// export const getFinishedGamesForUser = query({
+//   args: { userId: v.string() },
+//   handler: async (ctx, { userId }) => {
+//     const allFinished = await ctx.db
+//       .query("games")
+//       .filter((q) => q.eq(q.field("status"), "finished"))
+//       .order("desc")
+//       .take(200);
+//     return allFinished.filter((game) => game.playerOrder.includes(userId));
+//   },
+// });
+// function resolveBotUpgrade(
+//   money: number,
+//   properties: BotProperty[],
+//   difficulty: BotDifficulty,
+// ): { money: number; properties: BotProperty[]; label: string | null } {
+//   const { upgradeBuffer } = BOT_DIFFICULTY[difficulty];
+//   const candidates = properties
+//     .map((prop, idx) => ({ prop, idx, upgrade: nextUpgradeFor(prop) }))
+//     .filter(
+//       (
+//         c,
+//       ): c is {
+//         prop: BotProperty;
+//         idx: number;
+//         upgrade: NonNullable<ReturnType<typeof nextUpgradeFor>>;
+//       } => c.upgrade !== null,
+//     )
+//     .sort((a, b) =>
+//       difficulty === "aggressive"
+//         ? b.prop.price - a.prop.price
+//         : a.prop.price - b.prop.price,
+//     );
+//   for (const { prop, idx, upgrade } of candidates) {
+//     const cost = Math.round(prop.price * upgrade.costMultiplier);
+//     if (money - cost < upgradeBuffer) continue;
+//     const valueGain = Math.round(prop.price * upgrade.valueMultiplier);
+//     const updated = [...properties];
+//     updated[idx] = {
+//       ...prop,
+//       value: prop.value + valueGain,
+//       invested: (prop.invested ?? prop.price) + cost,
+//       upgrades: [...(prop.upgrades ?? []), upgrade.id],
+//     };
+//     return {
+//       money: money - cost,
+//       properties: updated,
+//       label: `${upgrade.emoji} ${prop.name} +${upgrade.label}`,
+//     };
+//   }
+//   return { money, properties, label: null };
+// }
+
+// // ─── Bot savings: banks spare cash for the payday interest ──────────────
+// function resolveBotSavings(
+//   money: number,
+//   savings: number,
+//   difficulty: BotDifficulty,
+//   botName: string,
+// ): { money: number; savings: number; label: string | null } {
+//   const { savingsBuffer, savingsRate } = BOT_DIFFICULTY[difficulty];
+//   const spare = money - savingsBuffer;
+//   if (spare < 50) return { money, savings, label: null };
+//   const deposit = Math.round(spare * savingsRate);
+//   if (deposit <= 0) return { money, savings, label: null };
+//   return {
+//     money: money - deposit,
+//     savings: savings + deposit,
+//     label: `🏦 ${botName} banked $${deposit.toLocaleString()} in savings`,
+//   };
+// }
+
+// // ─── Bot stocks: takes profit on big gainers, then buys into one pick ───
+// function resolveBotStocks(
+//   money: number,
+//   shares: { stockId: string; quantity: number; avgCost: number }[],
+//   priceById: Map<string, number>,
+//   difficulty: BotDifficulty,
+//   botName: string,
+// ): {
+//   money: number;
+//   shares: { stockId: string; quantity: number; avgCost: number }[];
+//   label: string | null;
+// } {
+//   const { stockBuffer, stockSpendRate, preferHighVolatility } =
+//     BOT_DIFFICULTY[difficulty];
+//   let cash = money;
+//   let holdings = [...shares];
+//   const labels: string[] = [];
+
+//   // 1) Take profit on the first holding up 25%+ so cash keeps circulating.
+//   for (const h of holdings) {
+//     const price = priceById.get(h.stockId);
+//     if (!price || price < h.avgCost * 1.25) continue;
+//     const stock = STOCKS.find((s) => s.id === h.stockId);
+//     const proceeds = price * h.quantity;
+//     cash += proceeds;
+//     holdings = holdings.filter((x) => x.stockId !== h.stockId);
+//     labels.push(
+//       `📉 ${botName} sold ${h.quantity} ${stock?.symbol ?? h.stockId} for $${proceeds.toLocaleString()}`,
+//     );
+//     break; // one sale per turn, same cadence as upgrades/trades
+//   }
+
+//   // 2) Buy into one stock with spare cash, matching the bot's risk profile.
+//   const spare = cash - stockBuffer;
+//   if (spare >= 20) {
+//     const budget = Math.round(spare * stockSpendRate);
+//     const affordable = STOCKS.filter(
+//       (s) => (priceById.get(s.id) ?? s.basePrice) <= budget,
+//     );
+//     if (affordable.length > 0) {
+//       const [pick] = [...affordable].sort((a, b) =>
+//         preferHighVolatility
+//           ? b.volatility - a.volatility
+//           : a.volatility - b.volatility,
+//       );
+//       const price = priceById.get(pick.id) ?? pick.basePrice;
+//       const quantity = Math.floor(budget / price);
+//       if (quantity > 0) {
+//         const cost = price * quantity;
+//         cash -= cost;
+//         const existing = holdings.find((h) => h.stockId === pick.id);
+//         holdings = existing
+//           ? holdings.map((h) =>
+//               h.stockId === pick.id
+//                 ? {
+//                     ...h,
+//                     quantity: h.quantity + quantity,
+//                     avgCost:
+//                       (h.avgCost * h.quantity + cost) / (h.quantity + quantity),
+//                   }
+//                 : h,
+//             )
+//           : [...holdings, { stockId: pick.id, quantity, avgCost: price }];
+//         labels.push(
+//           `📈 ${botName} bought ${quantity} ${pick.symbol} for $${cost.toLocaleString()}`,
+//         );
+//       }
+//     }
+//   }
+
+//   return { money: cash, shares: holdings, label: labels.join(" ") || null };
+// }
+
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
@@ -7,6 +1475,8 @@ import { GAMBLE_EVENTS, gambleDef } from "../lib/Gambleevents";
 import { LIFE_EVENTS } from "@/lib/LifeEvents";
 import { PROPERTIES } from "@/lib/Properties";
 import { PROPERTY_UPGRADES } from "@/lib/PropertyUpgrades";
+import { STOCKS } from "@/lib/Stocks";
+
 // ─── Deck Helpers ────────────────────────────────────────────────────
 const COLORS = ["red", "blue", "green", "yellow"] as const;
 const NUMBERS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -14,19 +1484,27 @@ const ACTIONS = ["skip", "reverse", "draw2"];
 const WILDS = ["wild", "wild_draw4"];
 const BOT_DIFFICULTY = {
   aggressive: {
-    // Cash buffer a bot insists on keeping after buying a property.
     propertyBuffer: 50,
-    // Cash buffer a bot insists on keeping after paying for an upgrade.
     upgradeBuffer: 100,
-    // Chance (0-1), checked once per own turn, of pulling the Gamble stack.
     gambleChance: 0.6,
+    savingsBuffer: 200, // NEW — cash kept on hand before banking
+    savingsRate: 0.2, // NEW — % of spare cash banked per turn
+    stockBuffer: 150, // NEW — cash kept on hand before investing
+    stockSpendRate: 0.5, // NEW — % of spare cash invested per turn
+    preferHighVolatility: true, // NEW — risk appetite when picking a stock
   },
   conservative: {
     propertyBuffer: 150,
     upgradeBuffer: 300,
     gambleChance: 0.15,
+    savingsBuffer: 100, // NEW
+    savingsRate: 0.5, // NEW — conservative bots love a safe 2%
+    stockBuffer: 300, // NEW
+    stockSpendRate: 0.2, // NEW
+    preferHighVolatility: false, // NEW
   },
 } as const;
+
 type BotDifficulty = keyof typeof BOT_DIFFICULTY;
 function difficultyOf(bot: { difficulty?: BotDifficulty }): BotDifficulty {
   return bot.difficulty ?? "conservative";
@@ -1076,6 +2554,7 @@ export const botTurn = internalMutation({
       bot.properties ?? [],
       difficulty,
     );
+
     botMoney = upgradeResult.money;
     let botProperties = upgradeResult.properties;
     const upgradeLastAction = upgradeResult.label;
@@ -1093,11 +2572,32 @@ export const botTurn = internalMutation({
       botMoney,
       difficulty,
     );
+    // NEW — Savings & stocks: give bots the same investing options humans
+    // have. Runs after upgrades/trades so the buffers see accurate cash.
+    const stocksResult = resolveBotStocks(
+      botMoney,
+      bot.shares ?? [],
+      priceMapOf(game),
+      difficulty,
+      bot.name,
+    );
+    botMoney = stocksResult.money;
+    const botShares = stocksResult.shares;
+    const savingsResult = resolveBotSavings(
+      botMoney,
+      bot.savings ?? 0,
+      difficulty,
+      bot.name,
+    );
+    botMoney = savingsResult.money;
+    const botSavings = savingsResult.savings;
     const combinedPrefix = [
       gambleLastAction,
       upgradeLastAction,
       tradeResult.label,
       proposeTradeLastAction,
+      stocksResult.label, // NEW
+      savingsResult.label, // NEW
     ]
       .filter(Boolean)
       .join(" ");
@@ -1169,8 +2669,8 @@ export const botTurn = internalMutation({
           {
             money: botMoney,
             properties: botProperties,
-            savings: bot.savings,
-            shares: bot.shares,
+            savings: botSavings,
+            shares: botShares,
           },
           priceById,
         );
@@ -1185,6 +2685,8 @@ export const botTurn = internalMutation({
             hand: [],
             money: botMoney,
             properties: botProperties,
+            savings: botSavings, // NEW
+            shares: botShares, // NEW
             ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
           });
           await ctx.db.patch(game._id, {
@@ -1198,6 +2700,7 @@ export const botTurn = internalMutation({
           await ctx.db.patch(roomId, { status: "finished" });
           return;
         }
+
         // Blocked -- draw 2 (through the same life/property pipeline) and stay in.
         const resolved = drawAndResolve(2, game.deck, [
           ...game.discardPile,
@@ -1217,6 +2720,8 @@ export const botTurn = internalMutation({
           hand: [...handCopy, ...resolved.keep],
           money: botMoneyAfterDraw + lifeMoneyDelta,
           properties: [...botProperties, ...botPropsAfterDraw],
+          savings: botSavings, // NEW
+          shares: botShares, // NEW
           ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
         });
         const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
@@ -1243,6 +2748,8 @@ export const botTurn = internalMutation({
         hand: handCopy,
         money: botMoney,
         properties: botProperties,
+        savings: botSavings, // NEW
+        shares: botShares, // NEW
         ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
       });
       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
@@ -1275,6 +2782,8 @@ export const botTurn = internalMutation({
         hand: [...bot.hand, ...resolved.keep],
         money: botMoneyAfterDraw + lifeMoneyDelta,
         properties: [...botProperties, ...botPropsAfterDraw],
+        savings: botSavings, // NEW
+        shares: botShares, // NEW
         ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
       });
       const numPlayers = game.playerOrder.length;
@@ -1360,4 +2869,96 @@ function resolveBotUpgrade(
     };
   }
   return { money, properties, label: null };
+}
+
+// ─── Bot savings: banks spare cash for the payday interest ──────────────
+function resolveBotSavings(
+  money: number,
+  savings: number,
+  difficulty: BotDifficulty,
+  botName: string,
+): { money: number; savings: number; label: string | null } {
+  const { savingsBuffer, savingsRate } = BOT_DIFFICULTY[difficulty];
+  const spare = money - savingsBuffer;
+  if (spare < 50) return { money, savings, label: null };
+  const deposit = Math.round(spare * savingsRate);
+  if (deposit <= 0) return { money, savings, label: null };
+  return {
+    money: money - deposit,
+    savings: savings + deposit,
+    label: `🏦 ${botName} banked $${deposit.toLocaleString()} in savings`,
+  };
+}
+
+// ─── Bot stocks: takes profit on big gainers, then buys into one pick ───
+function resolveBotStocks(
+  money: number,
+  shares: { stockId: string; quantity: number; avgCost: number }[],
+  priceById: Map<string, number>,
+  difficulty: BotDifficulty,
+  botName: string,
+): {
+  money: number;
+  shares: { stockId: string; quantity: number; avgCost: number }[];
+  label: string | null;
+} {
+  const { stockBuffer, stockSpendRate, preferHighVolatility } =
+    BOT_DIFFICULTY[difficulty];
+  let cash = money;
+  let holdings = [...shares];
+  const labels: string[] = [];
+
+  // 1) Take profit on the first holding up 25%+ so cash keeps circulating.
+  for (const h of holdings) {
+    const price = priceById.get(h.stockId);
+    if (!price || price < h.avgCost * 1.25) continue;
+    const stock = STOCKS.find((s) => s.id === h.stockId);
+    const proceeds = price * h.quantity;
+    cash += proceeds;
+    holdings = holdings.filter((x) => x.stockId !== h.stockId);
+    labels.push(
+      `📉 ${botName} sold ${h.quantity} ${stock?.symbol ?? h.stockId} for $${proceeds.toLocaleString()}`,
+    );
+    break; // one sale per turn, same cadence as upgrades/trades
+  }
+
+  // 2) Buy into one stock with spare cash, matching the bot's risk profile.
+  const spare = cash - stockBuffer;
+  if (spare >= 20) {
+    const budget = Math.round(spare * stockSpendRate);
+    const affordable = STOCKS.filter(
+      (s) => (priceById.get(s.id) ?? s.basePrice) <= budget,
+    );
+    if (affordable.length > 0) {
+      const [pick] = [...affordable].sort((a, b) =>
+        preferHighVolatility
+          ? b.volatility - a.volatility
+          : a.volatility - b.volatility,
+      );
+      const price = priceById.get(pick.id) ?? pick.basePrice;
+      const quantity = Math.floor(budget / price);
+      if (quantity > 0) {
+        const cost = price * quantity;
+        cash -= cost;
+        const existing = holdings.find((h) => h.stockId === pick.id);
+        holdings = existing
+          ? holdings.map((h) =>
+              h.stockId === pick.id
+                ? {
+                    ...h,
+                    quantity: h.quantity + quantity,
+                    avgCost:
+                      (h.avgCost * h.quantity + cost) / (h.quantity + quantity),
+                  }
+                : h,
+            )
+          : [...holdings, { stockId: pick.id, quantity, avgCost: price }];
+        labels.push(
+          `📈 ${botName} bought ${quantity} ${pick.symbol} for $${cost.toLocaleString()}`,
+        );
+      }
+    }
+  }
+
+  return { money: cash, shares: holdings, label: labels.join(" ") || null };
 }
