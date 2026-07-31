@@ -1,37 +1,60 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useBank, type UseBankOptions } from "@/hooks/useBank";
+import { useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
+import { useBank } from "@/hooks/useBank";
 import { BankVideoHeader } from "./Bankvideoheader";
 import { BankAccountPanel } from "./Bankaccountpanel";
 
-export interface BankModalProps extends UseBankOptions {
+export interface BankModalProps {
   open: boolean;
   onClose: () => void;
   videoSrc?: string;
   posterSrc?: string;
+  roomId: Id<"rooms">;
+  userId: string;
+  /** Live cash on hand, straight from the Convex `players` query. */
+  cash: number;
+  /** Live savings balance, straight from the Convex `players` query
+   *  (e.g. `mySavings`). This is the single source of truth — no local
+   *  copy is kept anywhere in the bank flow anymore. */
+  savings: number;
+  interestRate?: number;
 }
 
 /**
  * Drop this once near the root of your gameboard, alongside <BankButton />.
- * It owns nothing about game state itself — cash in/out flows through the
- * onCashChange you pass in, same as everywhere else in the game.
+ * Deposit/withdraw go straight through the real `bank.deposit` /
+ * `bank.withdraw` Convex mutations, so `players.money` and `players.savings`
+ * are patched server-side immediately. The live `players` query then pushes
+ * the updated `cash`/`savings` back down automatically — same pattern as
+ * every other action on the board (draw, play, upgrade, trade...).
  */
 export function BankModal({
   open,
   onClose,
   videoSrc,
   posterSrc,
+  roomId,
+  userId,
   cash,
-  onCashChange,
-  initialSavings,
-  initialInterestRate,
+  savings,
+  interestRate,
 }: BankModalProps) {
+  const depositMutation = useMutation(api.bank.deposit);
+  const withdrawMutation = useMutation(api.bank.withdraw);
+
   const bank = useBank({
-    cash,
-    onCashChange,
-    initialSavings,
-    initialInterestRate,
+    savings,
+    interestRate,
+    onDeposit: async (amount) => {
+      await depositMutation({ roomId, userId, amount });
+    },
+    onWithdraw: async (amount) => {
+      await withdrawMutation({ roomId, userId, amount });
+    },
   });
 
   return (
@@ -63,7 +86,7 @@ export function BankModal({
             <div className="overflow-y-auto">
               <BankAccountPanel
                 cash={cash}
-                savings={bank.savings}
+                savings={savings}
                 interestRate={bank.interestRate}
                 projectedWeeklyInterest={bank.projectedWeeklyInterest}
                 transactions={bank.transactions}

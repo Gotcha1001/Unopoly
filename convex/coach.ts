@@ -57,17 +57,49 @@ export const generateWeeklyCommentary = internalAction({
       turnCount,
     });
 
+    // ─── Stock market additions ───────────────────────────────────────
+    // Live per-room prices, same fallback pattern used everywhere else
+    // that reads game.stockPrices (convex/stocks.ts, useStocks.ts client
+    // side): if the room hasn't fluctuated prices yet, fall back to each
+    // holding's avgCost so a share position still values as "roughly
+    // what you paid" instead of $0.
+    const priceById = new Map<string, number>(
+      (game.stockPrices ?? []).map((s) => [s.id, s.price]),
+    );
+
     const summary = players
       .map((p) => {
-        const netWorth =
-          p.money + p.properties.reduce((s, prop) => s + prop.value, 0);
-        return `- ${p.name}${p.isBot ? " (bot)" : ""}: $${p.money} cash, $${
-          p.savings ?? 0
-        } savings, ${p.properties.length} properties (net worth ~$${netWorth})`;
+        const propertyValue = p.properties.reduce(
+          (s, prop) => s + prop.value,
+          0,
+        );
+        const savings = p.savings ?? 0;
+        const holdings = p.shares ?? [];
+        const sharesValue = holdings.reduce(
+          (s, h) => s + (priceById.get(h.stockId) ?? h.avgCost) * h.quantity,
+          0,
+        );
+        const sharesGainLoss = holdings.reduce((s, h) => {
+          const price = priceById.get(h.stockId) ?? h.avgCost;
+          return s + (price - h.avgCost) * h.quantity;
+        }, 0);
+        const sharesCount = holdings.reduce((s, h) => s + h.quantity, 0);
+        const netWorth = p.money + propertyValue + savings + sharesValue;
+
+        const sharesPart =
+          sharesCount > 0
+            ? `${sharesCount} shares (~$${Math.round(sharesValue)}, ${
+                sharesGainLoss >= 0 ? "+" : ""
+              }$${Math.round(sharesGainLoss)} gain/loss)`
+            : "no shares";
+
+        return `- ${p.name}${p.isBot ? " (bot)" : ""}: $${p.money} cash, $${savings} savings, ${p.properties.length} properties, ${sharesPart} (net worth ~$${Math.round(
+          netWorth,
+        )})`;
       })
       .join("\n");
 
-    const prompt = `You are a snarky but lovable financial commentator for a board game called Unopoly (Uno + Monopoly). It's payday. Roast/hype the players based on their finances below. Be short, funny, a little savage, and give ONE quirky money tip mixed in. Max 3 sentences total. No markdown, just plain text.
+    const prompt = `You are a snarky but lovable financial commentator for a board game called Unopoly (Uno + Monopoly). It's payday. Roast/hype the players based on their finances below — including their savings balance and any stock positions (call out cash hoarders sitting on fat savings while the market moves, share-heavy players riding gains or nursing losses, or anyone with nothing liquid at all). Be short, funny, a little savage, and give ONE quirky money tip mixed in. Max 3 sentences total. No markdown, just plain text.
 
 PLAYERS:
 ${summary}
