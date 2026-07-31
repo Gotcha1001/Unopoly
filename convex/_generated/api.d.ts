@@ -13,6 +13,7 @@ import type * as coach from "../coach.js";
 import type * as coachData from "../coachData.js";
 import type * as game from "../game.js";
 import type * as rooms from "../rooms.js";
+import type * as stocks from "../stocks.js";
 import type * as trades from "../trades.js";
 import type * as user from "../user.js";
 
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   coachData: typeof coachData;
   game: typeof game;
   rooms: typeof rooms;
+  stocks: typeof stocks;
   trades: typeof trades;
   user: typeof user;
 }>;

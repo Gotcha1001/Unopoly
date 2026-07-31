@@ -275,6 +275,7 @@ export const resetRoom = mutation({
         pendingLifeEvents: [],
         pendingGambleEvent: undefined,
         lastGambleTurn: undefined,
+        shares: [],
       });
     }
 

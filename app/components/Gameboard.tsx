@@ -1,5 +1,4 @@
 "use client";
-
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { motion, AnimatePresence } from "framer-motion";
@@ -35,7 +34,10 @@ import {
 import { BankButton } from "./Bankbutton";
 import { BankModal } from "./Bankmodal";
 import { useStreamingText } from "@/hooks/useStreamingText";
-
+// ── Stock market additions ────────────────────────────────────────────
+import { StockButton } from "./Stockbutton";
+import { StockMarketModal } from "./Stockmarketmodal";
+import { useStocks, type StockHolding } from "@/hooks/useStocks";
 // ─── Interfaces ───────────────────────────────────────────────────────
 interface Room {
   _id: Id<"rooms">;
@@ -48,7 +50,6 @@ interface Room {
   playerIds: string[];
   createdAt: number;
 }
-
 interface PropertyHolding {
   instanceId: string;
   id: string;
@@ -58,20 +59,17 @@ interface PropertyHolding {
   invested: number;
   upgrades: string[];
 }
-
 interface PropertyOffer {
   id: string;
   name: string;
   price: number;
   value: number;
 }
-
 interface LifeEventHolding {
   id: string;
   label: string;
   amount: number;
 }
-
 // ─── Gamble stack addition ────────────────────────────────────────────
 interface GambleEventHolding {
   id: string;
@@ -81,7 +79,6 @@ interface GambleEventHolding {
   wipeOut: boolean;
   jackpot: boolean;
 }
-
 interface Player {
   _id: Id<"players">;
   _creationTime: number;
@@ -105,8 +102,9 @@ interface Player {
   // ─── Gamble stack additions ─────────────────────────────────────────
   pendingGambleEvent?: GambleEventHolding | undefined;
   lastGambleTurn?: number | undefined;
+  // ─── Stock market additions ─────────────────────────────────────────
+  shares?: StockHolding[] | undefined;
 }
-
 interface Game {
   _id: Id<"games">;
   _creationTime: number;
@@ -148,15 +146,25 @@ interface Game {
         at: number;
       }
     | undefined;
+  // ─── Stock market additions ─────────────────────────────────────────
+  // Broadcasts the most recent payday's price moves (see convex/stocks.ts's
+  // fluctuatePrices, called from game.ts's paySalaryIfDue) so every client
+  // can toast "the market moved" the same way botGambleNotice does for a
+  // bot's Gamble pull.
+  stockMarketNotice?:
+    | {
+        turnCount: number;
+        changes: { id: string; price: number; pctChange: number }[];
+        at: number;
+      }
+    | undefined;
 }
-
 interface GameBoardProps {
   room: Room;
   game: Game;
   players: Player[];
   currentUserId: string;
 }
-
 // ─── Helpers ────────────────────────────────────────────────────────────
 function canPlayCard(
   card: string,
@@ -173,7 +181,6 @@ function canPlayCard(
   if (value === topValue) return true;
   return false;
 }
-
 function isCardPlayable(
   cardId: string,
   topCard: string,
@@ -190,13 +197,11 @@ function isCardPlayable(
   }
   return true;
 }
-
 function wealthOf(p: Pick<Player, "money" | "properties">) {
   return (
     (p.money ?? 0) + (p.properties ?? []).reduce((s, pr) => s + pr.value, 0)
   );
 }
-
 // ─── Rent additions ─────────────────────────────────────────────────────
 // Same 17%-of-combined-purchase-price rule used for the current player's
 // own "Earning $X/wk rent" badge --- pulled out into a shared helper so the
@@ -207,26 +212,21 @@ function weeklyRentOf(p: Pick<Player, "properties">) {
   if (props.length < 2) return 0;
   return Math.round(props.reduce((s, pr) => s + pr.price, 0) * 0.17);
 }
-
 const COLOR_OPTIONS = ["red", "blue", "green", "yellow"] as const;
-
 const COLOR_HEX: Record<string, string> = {
   red: "#ef4444",
   blue: "#3b82f6",
   green: "#22c55e",
   yellow: "#eab308",
 };
-
 const COLOR_GLOW: Record<string, string> = {
   red: "rgba(239,68,68,0.5)",
   blue: "rgba(59,130,246,0.5)",
   green: "rgba(34,197,94,0.5)",
   yellow: "rgba(234,179,8,0.5)",
 };
-
 const TABLE_BG =
   "radial-gradient(ellipse at 50% 40%, #1a4a2e 0%, #0f2d1c 45%, #091a10 100%)";
-
 // ─── Component ────────────────────────────────────────────────────────────
 export function GameBoard({
   room,
@@ -242,12 +242,10 @@ export function GameBoard({
   // ─── Gamble stack additions ─────────────────────────────────────────
   const drawGambleCard = useMutation(api.game.drawGambleCard);
   const acknowledgeGambleEvent = useMutation(api.game.acknowledgeGambleEvent);
-
   const playerHand = useQuery(api.game.getPlayerHand, {
     roomId: room._id,
     userId: currentUserId,
   });
-
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [pendingWildCard, setPendingWildCard] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<string | null>(null);
@@ -261,6 +259,12 @@ export function GameBoard({
   // Just visibility state for the modal --- BankModal owns the actual
   // savings/interest logic internally via useBank().
   const [bankOpen, setBankOpen] = useState(false);
+  // ─── Stock market additions ─────────────────────────────────────────
+  // Same shape as Bank above: just visibility state here, StockMarketModal
+  // owns the actual buy/sell logic internally via useStocks(). Holdings
+  // themselves live on the player doc (myPlayer.shares), same as
+  // properties --- not local state, so they stay in sync with Convex.
+  const [stockMarketOpen, setStockMarketOpen] = useState(false);
   // ─── Salary modal now carries cashBefore/cashAfter so AnimatedCash can
   // count up live inside the modal instead of animating unseen behind it ──
   const [salaryModal, setSalaryModal] = useState<{
@@ -279,7 +283,6 @@ export function GameBoard({
   const [moneyConfettiTrigger, setMoneyConfettiTrigger] = useState<
     number | null
   >(null);
-
   // ─── AI coach commentary ─────────────────────────────────────────────
   // Only fetched while the payday modal is open, keyed on this specific
   // payday's turnCount so it never re-fires mid-week. Skipped entirely on
@@ -294,7 +297,6 @@ export function GameBoard({
       ? { roomId: room._id, turnCount: salaryModal.turnCount }
       : "skip",
   );
-
   // coachData is now: undefined (Convex's own initial-fetch loading state,
   // typically gone in one round trip) | null (not a coach week) |
   // { status: "pending" | "streaming" | "done", text: string }
@@ -306,40 +308,31 @@ export function GameBoard({
     !!coachData &&
     typeof coachData === "object" &&
     streamedText.length < coachData.text.length;
-
   const { selected: boardBg } = useBackground();
-
   // Ref for the discard pile drop target
   const discardRef = useRef<HTMLDivElement>(null);
-
   // ── Sound ──────────────────────────────────────────────────────────────
   const { play, setMuted } = useSoundManager();
   const [muted, setMutedState] = useState(false);
-
   const [draggingCard, setDraggingCard] = useState<string | null>(null);
-
   const toggleMute = () => {
     const next = !muted;
     setMutedState(next);
     setMuted(next);
   };
-
   const prevIsMyTurn = useRef(false);
   const prevHandLength = useRef<number | null>(null);
   const prevGameStatus = useRef<string>("active");
   const dealPlayed = useRef(false);
-
   // ── Derived ────────────────────────────────────────────────────────────
   const currentPlayerId = game.playerOrder[game.currentPlayerIndex];
   const isMyTurn = currentPlayerId === currentUserId;
   const topCard = game.discardPile[game.discardPile.length - 1];
   const opponents = players.filter((p) => p.userId !== currentUserId);
-
   const [tradeTargetId, setTradeTargetId] = useState<string | null>(null);
   const tradeTarget = opponents.find((p) => p.userId === tradeTargetId) ?? null;
   const [outgoingOfferTradeId, setOutgoingOfferTradeId] =
     useState<Id<"trades"> | null>(null);
-
   // ── NEW: trade-offer entry points ──────────────────────────────────────
   // pendingOfferPropertyId is set when the flow was started from a specific
   // owned property (the "🤝 Offer to opponents" button in the upgrade
@@ -354,7 +347,6 @@ export function GameBoard({
     string | null
   >(null);
   const [showOpponentPicker, setShowOpponentPicker] = useState(false);
-
   const openTradeFlow = (propertyInstanceId: string | null) => {
     if (opponents.length === 0) {
       toast.error("No opponents to trade with");
@@ -367,7 +359,6 @@ export function GameBoard({
       setShowOpponentPicker(true);
     }
   };
-
   // ── NEW: "make an offer" (buy) flow ────────────────────────────────────
   // A separate, simpler path from the sell flow above --- this is for
   // offering cash to BUY one of an opponent's properties, so it only ever
@@ -380,7 +371,6 @@ export function GameBoard({
   const buyOfferTarget =
     opponentsWithProperties.find((p) => p.userId === buyOfferTargetId) ?? null;
   const [showBuyOpponentPicker, setShowBuyOpponentPicker] = useState(false);
-
   const openBuyOfferFlow = () => {
     if (opponentsWithProperties.length === 0) {
       toast.error("No opponent properties to offer on yet");
@@ -392,12 +382,10 @@ export function GameBoard({
       setShowBuyOpponentPicker(true);
     }
   };
-
   const currentPlayerName =
     players.find((p) => p.userId === currentPlayerId)?.name ?? "Unknown";
   const currentGlow = COLOR_GLOW[game.currentColor] ?? "rgba(147,51,234,0.5)";
   const currentHex = COLOR_HEX[game.currentColor] ?? "#9333ea";
-
   const myPlayer = players.find((p) => p.userId === currentUserId);
   const myName = myPlayer?.name ?? "Player";
   const myMoney = myPlayer?.money ?? 0;
@@ -406,6 +394,18 @@ export function GameBoard({
     0,
   );
   const myProperties = myPlayer?.properties ?? [];
+  // ─── Stock market additions ─────────────────────────────────────────
+  // Holdings live on the player doc, same pattern as myProperties above.
+  // useStocks subscribes to the live market so the StockButton badge can
+  // show current portfolio value --- StockMarketModal calls useStocks
+  // again internally for its own buy/sell UI, which is fine: Convex
+  // dedupes identical queries across components.
+  const myShares = myPlayer?.shares ?? [];
+  const { portfolioValue: myPortfolioValue } = useStocks({
+    roomId: room._id,
+    userId: currentUserId,
+    holdings: myShares,
+  });
   const myPendingProperty = myPlayer?.pendingProperties?.[0];
   const myPendingPropertyQueueLength = myPlayer?.pendingProperties?.length ?? 0;
   // ── NEW: whether the current pending property offer is affordable ──────
@@ -420,18 +420,15 @@ export function GameBoard({
   const hasUsedGambleThisTurn =
     (myPlayer?.lastGambleTurn ?? -1) === (game.turnCount ?? 0);
   const canPullGamble = isMyTurn && !hasUsedGambleThisTurn && !pullingGamble;
-
   const upgradeProperty = useMutation(api.game.upgradeProperty);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(
     null,
   );
   const [upgrading, setUpgrading] = useState(false);
-
   // Derive live, not a stale snapshot — so the modal updates the instant
   // the mutation resolves and Convex refetches myProperties.
   const selectedProperty =
     myProperties.find((p) => p.instanceId === selectedPropertyId) ?? null;
-
   const handleUpgrade = async () => {
     if (!selectedProperty) return;
     setUpgrading(true);
@@ -448,18 +445,14 @@ export function GameBoard({
       setUpgrading(false);
     }
   };
-
   const richestUserId = players.length
     ? players.reduce((best, p) => (wealthOf(p) > wealthOf(best) ? p : best))
         .userId
     : null;
-
   const maxOpponentWealth = opponents.length
     ? Math.max(...opponents.map(wealthOf))
     : -Infinity;
-
   const isLastCard = (playerHand?.length ?? 0) === 1;
-
   // Predicts whether playing this specific card (your last one) would win
   // the game, so we can warn the player *before* they commit to it instead
   // of surprising them with a forced draw-2 afterward. Life/property cards
@@ -472,7 +465,6 @@ export function GameBoard({
       projectedWealth,
     };
   };
-
   // ── Sound effects ────────────────────────────────────────────────────
   useEffect(() => {
     if (!dealPlayed.current && game.status === "active") {
@@ -480,12 +472,10 @@ export function GameBoard({
       setTimeout(() => play("cardDeal"), 300);
     }
   }, [game.status, play]);
-
   useEffect(() => {
     if (isMyTurn && !prevIsMyTurn.current) play("yourTurn");
     prevIsMyTurn.current = isMyTurn;
   }, [isMyTurn, play]);
-
   useEffect(() => {
     if (playerHand === undefined) return;
     if (
@@ -497,14 +487,12 @@ export function GameBoard({
     }
     prevHandLength.current = playerHand.length;
   }, [playerHand, play]);
-
   useEffect(() => {
     if (prevGameStatus.current !== "finished" && game.status === "finished") {
       play(game.winnerId === currentUserId ? "win" : "lose");
     }
     prevGameStatus.current = game.status;
   }, [game.status, game.winnerId, currentUserId, play]);
-
   // A 7-day week (turns 1-7), then payday on the 8th turn --- like next
   // Monday --- everyone still in the game gets paid a $200 "salary". The
   // server stamps salaryNotice.at with a fresh timestamp each time it
@@ -538,7 +526,6 @@ export function GameBoard({
     setMoneyConfettiTrigger(Date.now());
     play("cardDeal");
   }, [game.salaryNotice, currentUserId, myMoney, play]);
-
   // ─── Confetti: positive life-event cards ──────────────────────────────
   // pendingLifeEvents has no timestamp to key off (unlike salaryNotice/
   // botGambleNotice), so we key on the queue's own contents and only fire
@@ -556,7 +543,6 @@ export function GameBoard({
     const totalDelta = myPendingLifeEvents.reduce((s, e) => s + e.amount, 0);
     if (totalDelta > 0) setMoneyConfettiTrigger(Date.now());
   }, [myPendingLifeEvents]);
-
   // ─── Confetti: winning/jackpot Gamble stack pulls ─────────────────────
   // Same key-based dedup approach as above, applied to the single pending
   // gamble event. Only bursts on an actual win (or jackpot) --- never on a
@@ -575,7 +561,6 @@ export function GameBoard({
       setMoneyConfettiTrigger(Date.now());
     }
   }, [myPendingGambleEvent]);
-
   // Mirrors the salaryNotice effect above: game.botGambleNotice.at gets a
   // fresh timestamp every time a bot pulls the Gamble stack, so this just
   // watches for that changing (not the field's raw presence, since it
@@ -589,20 +574,39 @@ export function GameBoard({
     if (!notice) return;
     if (lastBotGambleAt.current === notice.at) return;
     lastBotGambleAt.current = notice.at;
-
     const amountText =
       notice.amount === 0
         ? ""
         : ` (${notice.amount > 0 ? "+" : "-"}$${Math.abs(notice.amount).toLocaleString()})`;
     const message = `🎲 ${notice.botName}: ${notice.label}${amountText}`;
-
     if (notice.wipeOut) toast.error(message);
     else if (notice.jackpot) toast.success(message);
     else if (notice.amount > 0) toast.success(message);
     else if (notice.amount < 0) toast.warning(message);
     else toast(message);
   }, [game.botGambleNotice]);
-
+  // ─── Stock market additions ─────────────────────────────────────────
+  // Mirrors the botGambleNotice effect directly above: game.stockMarketNotice.at
+  // gets a fresh timestamp each payday (set by convex/stocks.ts's
+  // fluctuatePrices, called from game.ts's paySalaryIfDue), so this just
+  // watches for that changing and toasts a quick market summary once per
+  // payday, for every player at the table --- not just the acting player.
+  const lastStockMarketAt = useRef<number | null>(
+    game.stockMarketNotice?.at ?? null,
+  );
+  useEffect(() => {
+    const notice = game.stockMarketNotice;
+    if (!notice) return;
+    if (lastStockMarketAt.current === notice.at) return;
+    lastStockMarketAt.current = notice.at;
+    if (notice.changes.length === 0) return;
+    const biggestMover = notice.changes.reduce((a, b) =>
+      Math.abs(b.pctChange) > Math.abs(a.pctChange) ? b : a,
+    );
+    const direction = biggestMover.pctChange >= 0 ? "📈" : "📉";
+    const message = `${direction} The market moved --- biggest swing: ${biggestMover.id.replace("stock_", "")} ${biggestMover.pctChange >= 0 ? "+" : ""}${biggestMover.pctChange.toFixed(1)}%`;
+    toast(message, { description: "Stock prices just updated for payday" });
+  }, [game.stockMarketNotice]);
   // ── Handlers ────────────────────────────────────────────────────────────
   const handleCardClick = async (cardId: string) => {
     if (!isMyTurn) {
@@ -621,17 +625,14 @@ export function GameBoard({
       }
       return;
     }
-
     const { value } = parseCard(cardId);
     if (value === "wild" || cardId === "wild_draw4") play("cardPlayWild");
     else play("cardPlay", parseCard(cardId).color);
-
     if (value === "wild" || cardId === "wild_draw4") {
       setPendingWildCard(cardId);
       setShowColorPicker(true);
       return;
     }
-
     try {
       setSelectedCard(cardId);
       const result = await playCard({
@@ -646,7 +647,6 @@ export function GameBoard({
       setSelectedCard(null);
     }
   };
-
   // Toasts the *acting player specifically* (not just the shared game feed
   // line) when going out either wins or gets blocked by the wealth check ---
   // so it's unambiguous that a forced draw-2 wasn't a bug.
@@ -668,7 +668,6 @@ export function GameBoard({
       );
     }
   };
-
   const handleColorChoice = async (color: string) => {
     if (!pendingWildCard) return;
     setShowColorPicker(false);
@@ -687,7 +686,6 @@ export function GameBoard({
       setPendingWildCard(null);
     }
   };
-
   const handleDraw = async () => {
     if (!isMyTurn) {
       toast.error("Not your turn!");
@@ -700,11 +698,9 @@ export function GameBoard({
       toast.error(err instanceof Error ? err.message : "Failed to draw");
     }
   };
-
   // ── Property offer response ─────────────────────────────────────────────
   const handlePropertyResponse = async (accept: boolean) => {
     if (respondingProperty) return;
-
     // ── NEW: check affordability client-side before ever calling the
     // mutation. This is what fixes the "click Buy House and nothing seems
     // to happen" feeling --- previously the only affordability check was
@@ -718,7 +714,6 @@ export function GameBoard({
       );
       return;
     }
-
     setRespondingProperty(true);
     play("buttonClick");
     try {
@@ -735,7 +730,6 @@ export function GameBoard({
       setRespondingProperty(false);
     }
   };
-
   // ── Life event acknowledgement ─────────────────────────────────────────
   // The money was already applied the instant the card was drawn --- this
   // just clears the queue so the "you got/owed $X" modal goes away.
@@ -751,7 +745,6 @@ export function GameBoard({
       setAcknowledgingLifeEvents(false);
     }
   };
-
   // ── Gamble stack: pull + acknowledge ────────────────────────────────────
   // Purely elective, only available on your own turn, and never ends your
   // turn --- you still have to play a card or draw from the main pile
@@ -778,7 +771,6 @@ export function GameBoard({
       setPullingGamble(false);
     }
   };
-
   const handleAcknowledgeGamble = async () => {
     if (acknowledgingGamble) return;
     setAcknowledgingGamble(true);
@@ -794,7 +786,6 @@ export function GameBoard({
       setAcknowledgingGamble(false);
     }
   };
-
   // ── Drag handlers ────────────────────────────────────────────────────────
   // Called when a draggable card is dropped onto the discard pile
   const handleDiscardDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -803,16 +794,13 @@ export function GameBoard({
     const cardId = e.dataTransfer.getData("cardId");
     if (cardId) handleCardClick(cardId);
   };
-
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault(); // required to allow drop
     setIsDragOver(true);
   };
-
   const handleDragLeave = () => {
     setIsDragOver(false);
   };
-
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div
@@ -820,10 +808,9 @@ export function GameBoard({
       style={!boardBg.src ? { background: TABLE_BG } : undefined}
     >
       {/* ── Confetti --- fires for positive life events, Gamble wins/jackpots,
-          and payday. Fixed/full-screen internally, so placement here is
-          just for readability, not layout. ───────────────────────────── */}
+and payday. Fixed/full-screen internally, so placement here is
+just for readability, not layout. ───────────────────────────── */}
       <ConfettiBurst trigger={moneyConfettiTrigger} variant="money" />
-
       {/* Background image layer */}
       {boardBg.src && (
         <img
@@ -856,7 +843,6 @@ export function GameBoard({
           zIndex: 3,
         }}
       />
-
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <header className="relative z-10 flex items-center justify-between gap-2 px-2 sm:px-4 py-2 sm:py-3 border-b border-white/10 bg-black/20 backdrop-blur-sm">
         <button
@@ -877,6 +863,12 @@ export function GameBoard({
             onClick={() => setBankOpen(true)}
             className="!px-2.5 !py-1.5 sm:!px-4 sm:!py-2.5"
           />
+          {/* ── Stock market additions: opens StockMarketModal ─────────────── */}
+          <StockButton
+            onClick={() => setStockMarketOpen(true)}
+            portfolioValue={myPortfolioValue}
+            className="!px-2.5 !py-1.5 sm:!px-4 sm:!py-2.5"
+          />
           <button
             onClick={toggleMute}
             className="p-1.5 sm:p-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-all"
@@ -888,7 +880,6 @@ export function GameBoard({
           </div>
         </div>
       </header>
-
       {/* ── Video chat panel ──────────────────────────────────────────────── */}
       <div className="relative z-20 px-2 sm:px-4 pt-2">
         <VideoLobby
@@ -898,7 +889,6 @@ export function GameBoard({
           defaultCollapsed={true}
         />
       </div>
-
       <div className="flex-1 flex flex-col relative z-10 overflow-hidden">
         {/* ── Opponents row ────────────────────────────────────────────────── */}
         <div className="flex justify-center gap-2 sm:gap-6 pt-3 sm:pt-4 pb-2 px-2 sm:px-4 flex-wrap">
@@ -977,10 +967,10 @@ export function GameBoard({
                     </span>
                   )}
                   {/* ── NEW: total wealth badge --- cash + everything their
-                      properties are worth, the same number the "Not the
-                      richest yet" warning compares you against. Only shown
-                      once they actually own something, so it doesn't just
-                      duplicate the cash badge for a property-less opponent. */}
+properties are worth, the same number the "Not the
+richest yet" warning compares you against. Only shown
+once they actually own something, so it doesn't just
+duplicate the cash badge for a property-less opponent. */}
                   {oppProperties.length > 0 && (
                     <span
                       className="px-1.5 py-0.5 rounded-full bg-white/15 text-white/90 font-bold text-[10px]"
@@ -990,10 +980,10 @@ export function GameBoard({
                     </span>
                   )}
                   {/* ── NEW: weekly rent badge --- same 17%-of-purchase-price
-                      rule as the player's own rent badge, only once they own
-                      2+ properties. Explains why their wealth keeps growing
-                      every payday even if you never see them buy anything
-                      new. ──────────────────────────────────────────────── */}
+rule as the player's own rent badge, only once they own
+2+ properties. Explains why their wealth keeps growing
+every payday even if you never see them buy anything
+new. ──────────────────────────────────────────────── */}
                   {oppWeeklyRent > 0 && (
                     <span
                       className="px-1.5 py-0.5 rounded-full bg-emerald-400/10 text-emerald-200 font-bold text-[10px]"
@@ -1042,7 +1032,6 @@ export function GameBoard({
             );
           })}
         </div>
-
         {/* ── Center game area ──────────────────────────────────────────── */}
         <div className="flex-1 flex flex-col items-center justify-center gap-3 sm:gap-4 px-2 sm:px-4 py-2 overflow-y-auto">
           <AnimatePresence mode="wait">
@@ -1057,7 +1046,6 @@ export function GameBoard({
               {game.lastAction ?? "Game started!"}
             </motion.div>
           </AnimatePresence>
-
           <AnimatePresence mode="wait">
             <motion.div
               key={currentPlayerId}
@@ -1094,7 +1082,6 @@ export function GameBoard({
               )}
             </motion.div>
           </AnimatePresence>
-
           <div className="flex items-center flex-wrap justify-center gap-2 sm:gap-3 px-2">
             <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-black/30 border border-white/15 backdrop-blur-sm">
               <span className="text-[10px] text-white/50 uppercase tracking-wider">
@@ -1133,7 +1120,6 @@ export function GameBoard({
               </motion.div>
             )}
           </div>
-
           <div className="flex items-center flex-wrap justify-center gap-4 sm:gap-6 md:gap-10">
             {/* Draw pile */}
             <div className="flex flex-col items-center gap-2">
@@ -1162,7 +1148,6 @@ export function GameBoard({
                 {isMyTurn ? "Draw" : "Deck"}
               </span>
             </div>
-
             {/* ── Discard pile --- also a drop target ──────────────────────── */}
             <div className="flex flex-col items-center gap-2 mt-5">
               <div
@@ -1218,7 +1203,6 @@ export function GameBoard({
                 Discard
               </span>
             </div>
-
             {/* ── Gamble pile --- optional side stack, never ends your turn ── */}
             <div className="flex flex-col items-center gap-2 mt-5">
               <motion.div
@@ -1274,7 +1258,6 @@ export function GameBoard({
             </div>
           </div>
         </div>
-
         {/* ── Player's hand ─────────────────────────────────────────────────── */}
         <div
           className="relative border-t border-white/10 bg-black/40 backdrop-blur-md px-2 sm:px-4 pt-3 pb-4 overflow-visible"
@@ -1310,10 +1293,9 @@ export function GameBoard({
               )}
             </AnimatePresence>
           </div>
-
           {/* ── Pre-play hint --- tells you BEFORE you commit whether going out
-              with your last card would actually win, or just draw you 2 and
-              keep you in the game. Avoids surprising forced-draw moments. ── */}
+with your last card would actually win, or just draw you 2 and
+keep you in the game. Avoids surprising forced-draw moments. ── */}
           <AnimatePresence>
             {isLastCard &&
               playerHand &&
@@ -1347,7 +1329,6 @@ export function GameBoard({
                 );
               })()}
           </AnimatePresence>
-
           <div className="flex flex-wrap justify-center gap-1.5 overflow-visible pt-3 pb-1">
             {playerHand?.map((cardId, i) => {
               const playable =
@@ -1401,7 +1382,6 @@ export function GameBoard({
               );
             })}
           </div>
-
           {isMyTurn && game.drawStack > 0 && (
             <motion.p
               initial={{ opacity: 0, y: 4 }}
@@ -1411,13 +1391,12 @@ export function GameBoard({
               Play a matching +2 or +4, or draw {game.drawStack} cards!
             </motion.p>
           )}
-
           {/* ── My Wallet & Properties --- cash + owned houses, below the hand ──
-              Fixed order: cash → total wealth → rent always sit together on
-              row 1 (they're compact, so this stays on one line on desktop
-              too). Properties get their own row 2 so they can wrap to full
-              width on narrow/mobile screens instead of being squeezed by
-              the wallet badges. ─────────────────────────────────────────── */}
+Fixed order: cash → total wealth → rent always sit together on
+row 1 (they're compact, so this stays on one line on desktop
+too). Properties get their own row 2 so they can wrap to full
+width on narrow/mobile screens instead of being squeezed by
+the wallet badges. ─────────────────────────────────────────── */}
           <div className="mt-4 pt-3 border-t border-white/10 flex flex-col items-center gap-1.5 sm:gap-2">
             {/* Row 1: cash, total wealth, rent --- always in this order */}
             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
@@ -1439,18 +1418,16 @@ export function GameBoard({
                 {richestUserId === currentUserId ? "👑" : "💰"}{" "}
                 <AnimatedCash value={myMoney} />
               </div>
-
               {myPropertyValue > 0 && (
                 <div className="px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/5 text-[11px] font-semibold text-white/60">
                   Total wealth:{" "}
                   <AnimatedCash value={myMoney + myPropertyValue} />
                 </div>
               )}
-
               {/* ─── Rent additions ────────────────────────────────────────────
-                  2+ properties start earning rent (17% of combined purchase
-                  price) every payday, on top of salary. Shown only once it
-                  actually applies --- everything else here is unchanged. */}
+2+ properties start earning rent (17% of combined purchase
+price) every payday, on top of salary. Shown only once it
+actually applies --- everything else here is unchanged. */}
               {myProperties.length > 1 && (
                 <div
                   className="px-2.5 py-1.5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-[11px] font-semibold text-emerald-200"
@@ -1466,7 +1443,6 @@ export function GameBoard({
                 </div>
               )}
             </div>
-
             {/* Row 2: properties --- own row so they get full width on mobile */}
             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 w-full">
               {myProperties.length === 0 ? (
@@ -1494,12 +1470,11 @@ export function GameBoard({
                 ))
               )}
             </div>
-
             {/* Row 3: "make an offer" --- offer cash to buy one of an
-                opponent's properties. Only shown once someone actually owns
-                a property to offer on; with an empty board (like at game
-                start) there's nothing to make an offer for, so the button
-                stays hidden rather than opening an empty picker. ────────── */}
+opponent's properties. Only shown once someone actually owns
+a property to offer on; with an empty board (like at game
+start) there's nothing to make an offer for, so the button
+stays hidden rather than opening an empty picker. ────────── */}
             {opponentsWithProperties.length > 0 && (
               <button
                 onClick={openBuyOfferFlow}
@@ -1511,7 +1486,6 @@ export function GameBoard({
           </div>
         </div>
       </div>
-
       {/* ── Wild color picker modal ──────────────────────────────────────── */}
       <AnimatePresence>
         {showColorPicker && (
@@ -1580,7 +1554,6 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* ── Property offer modal --- Accept/Decline ─────────────────────────── */}
       <AnimatePresence>
         {myPendingProperty && (
@@ -1658,7 +1631,6 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* ── Property upgrade modal ─────────────────────────────────────── */}
       <AnimatePresence>
         {selectedProperty && (
@@ -1697,7 +1669,6 @@ export function GameBoard({
               <p className="text-emerald-300 font-bold text-lg mb-4">
                 Worth ${selectedProperty.value.toLocaleString()}
               </p>
-
               {selectedProperty.upgrades.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 justify-center mb-4">
                   {selectedProperty.upgrades.map((upId) => {
@@ -1715,7 +1686,6 @@ export function GameBoard({
                   })}
                 </div>
               )}
-
               {(() => {
                 const nextUpgrade =
                   PROPERTY_UPGRADES_META[selectedProperty.upgrades.length];
@@ -1775,12 +1745,11 @@ export function GameBoard({
                   </div>
                 );
               })()}
-
               {/* ── NEW: offer this specific property to an opponent ──────
-                  Sits right below the upgrade panel, inside the same "owned
-                  property" modal --- lets the person send the property they're
-                  already looking at straight into a trade offer without
-                  hunting for it again in the generic trade panel. */}
+Sits right below the upgrade panel, inside the same "owned
+property" modal --- lets the person send the property they're
+already looking at straight into a trade offer without
+hunting for it again in the generic trade panel. */}
               {opponents.length > 0 && (
                 <motion.button
                   whileHover={{ scale: 1.02 }}
@@ -1795,7 +1764,6 @@ export function GameBoard({
                   🤝 Offer to opponents
                 </motion.button>
               )}
-
               <button
                 onClick={() => setSelectedPropertyId(null)}
                 className="mt-2 text-white/50 text-xs hover:text-white/80 transition-colors"
@@ -1806,7 +1774,6 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* ── Life event modal --- money card drawn, applied instantly ────────────── */}
       <AnimatePresence>
         {myPendingLifeEvents.length > 0 &&
@@ -1887,7 +1854,6 @@ export function GameBoard({
             );
           })()}
       </AnimatePresence>
-
       {/* ── Gamble result modal --- optional side-stack pull, applied instantly ── */}
       <AnimatePresence>
         {myPendingGambleEvent &&
@@ -1974,11 +1940,10 @@ export function GameBoard({
             );
           })()}
       </AnimatePresence>
-
       {/* ── Salary modal --- payday every 8th turn (a 7-day week), $200 ─────────── */}
       {/* ── Salary modal — payday every 8th turn (a 7-day week), $200 base,
-    now with a real pending → streaming → done coach state and a
-    radial purple/indigo "futuristic timeout" theme ─────────── */}
+now with a real pending → streaming → done coach state and a
+radial purple/indigo "futuristic timeout" theme ─────────── */}
       <AnimatePresence>
         {salaryModal && (
           <motion.div
@@ -2006,7 +1971,7 @@ export function GameBoard({
               }}
             >
               {/* Slow-pulsing glow layer behind everything — the "futuristic
-            timeout" heartbeat. Purely decorative, pointer-events off. */}
+timeout" heartbeat. Purely decorative, pointer-events off. */}
               <motion.div
                 className="pointer-events-none absolute inset-0"
                 style={{
@@ -2020,12 +1985,10 @@ export function GameBoard({
                   ease: "easeInOut",
                 }}
               />
-
               <div className="relative">
                 <div className="text-5xl mb-2">
                   {salaryModal.rentAmount > 0 ? "💵🏠" : "💵"}
                 </div>
-
                 <h3 className="font-black text-2xl mb-1 text-white tracking-tight">
                   You earned $
                   {(
@@ -2033,7 +1996,6 @@ export function GameBoard({
                   ).toLocaleString()}
                   !
                 </h3>
-
                 {salaryModal.rentAmount > 0 && (
                   <p className="text-xs text-violet-200/80 mb-2 font-semibold">
                     ${salaryModal.amount.toLocaleString()} salary + $
@@ -2041,7 +2003,6 @@ export function GameBoard({
                     properties
                   </p>
                 )}
-
                 {/* Animated wallet total */}
                 <div className="flex items-center justify-center gap-1.5 mb-3 px-4 py-2 rounded-xl bg-black/30 border border-indigo-300/25">
                   <span className="text-[10px] uppercase tracking-widest text-white/40">
@@ -2054,7 +2015,6 @@ export function GameBoard({
                     className="text-lg font-black text-fuchsia-200"
                   />
                 </div>
-
                 {/* 7-days-of-the-week strip */}
                 <div className="flex items-center justify-center gap-1.5 mb-4">
                   {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
@@ -2075,17 +2035,15 @@ export function GameBoard({
                     </div>
                   ))}
                 </div>
-
                 <p className="text-white/50 text-xs mb-5">
                   Another week&apos;s gone by at the table — payday for everyone
                   still playing!
                 </p>
-
                 {/* ─── AI coach commentary — three real states now:
-              undefined/pending -> please wait, streaming -> text grows
-              live with a blinking cursor, done -> settled text.
-              coachData === null means genuinely not a coach week, so
-              nothing renders and the layout doesn't shift. ─────── */}
+undefined/pending -> please wait, streaming -> text grows
+live with a blinking cursor, done -> settled text.
+coachData === null means genuinely not a coach week, so
+nothing renders and the layout doesn't shift. ─────── */}
                 {coachData !== null && (
                   <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-xl bg-black/30 border border-violet-400/25 text-left">
                     <span className="text-base leading-none mt-0.5">🔮</span>
@@ -2120,7 +2078,6 @@ export function GameBoard({
                     )}
                   </div>
                 )}
-
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -2138,9 +2095,8 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* ── Opponent picker --- used when a trade flow starts without a
-          specific opponent already chosen (2+ opponents at the table) ──── */}
+specific opponent already chosen (2+ opponents at the table) ──── */}
       <AnimatePresence>
         {showOpponentPicker && (
           <motion.div
@@ -2203,9 +2159,8 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* ── Buy-offer opponent picker --- only lists opponents who actually
-          own a property, since this flow is "offer cash to buy theirs." ── */}
+own a property, since this flow is "offer cash to buy theirs." ── */}
       <AnimatePresence>
         {showBuyOpponentPicker && (
           <motion.div
@@ -2264,33 +2219,46 @@ export function GameBoard({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* ── Bank modal ──────────────────────────────────────────────────────
-          onCashChange re-uses playCard's plumbing pattern: it just needs
-          to keep local UI in sync while useBank's own mutations (inside
-          BankModal/useBank) do the actual server-side deposit/withdraw.
-          Since `money` already comes from the live Convex `players` query,
-          this is effectively a no-op passthrough --- Convex will push the
-          updated balance down through `players`/`myMoney` automatically
-          once the bank mutation resolves, the same way every other action
-          on this board (draw, play, upgrade, trade...) already works. If
-          your actual useBank hook expects something else here (e.g. it
-          wants the setter to call a specific mutation directly instead of
-          relying on Convex's live query), let me know and I'll wire that
-          in --- I don't have hooks/useBank.ts in front of me to confirm
-          its exact contract. */}
+onCashChange re-uses playCard's plumbing pattern: it just needs
+to keep local UI in sync while useBank's own mutations (inside
+BankModal/useBank) do the actual server-side deposit/withdraw.
+Since `money` already comes from the live Convex `players` query,
+this is effectively a no-op passthrough --- Convex will push the
+updated balance down through `players`/`myMoney` automatically
+once the bank mutation resolves, the same way every other action
+on this board (draw, play, upgrade, trade...) already works. If
+your actual useBank hook expects something else here (e.g. it
+wants the setter to call a specific mutation directly instead of
+relying on Convex's live query), let me know and I'll wire that
+in --- I don't have hooks/useBank.ts in front of me to confirm
+its exact contract. */}
       <BankModal
         open={bankOpen}
         onClose={() => setBankOpen(false)}
         cash={myMoney}
         onCashChange={() => {
           /* no-op: Convex's live `players` query already keeps `myMoney`
-             in sync once useBank's internal mutations resolve. */
+in sync once useBank's internal mutations resolve. */
         }}
         initialSavings={0}
         videoSrc="/videos/bank-vault.mp4"
       />
-
+      {/* ── Stock market modal ────────────────────────────────────────────
+Owns no game state itself --- money/shares changes flow through
+convex/stocks.ts's buyShares/sellShares mutations, same as
+BankModal flows cash through its own deposit/withdraw mutations.
+holdings comes straight off the live `players` query (myShares),
+so a buy/sell resolving on the server flows back down automatically,
+same as every other action on this board. */}
+      <StockMarketModal
+        open={stockMarketOpen}
+        onClose={() => setStockMarketOpen(false)}
+        roomId={room._id}
+        userId={currentUserId}
+        holdings={myShares}
+        videoSrc="/videos/bank-vault.mp4"
+      />
       <TradeInbox roomId={room._id} userId={currentUserId} />
       {outgoingOfferTradeId && (
         <OutgoingOfferPopup
