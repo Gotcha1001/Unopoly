@@ -104,6 +104,8 @@ interface Player {
   lastGambleTurn?: number | undefined;
   // ─── Stock market additions ─────────────────────────────────────────
   shares?: StockHolding[] | undefined;
+  // ─── Bank additions ──────────────────────────────────────────────────
+  savings?: number | undefined;
 }
 interface Game {
   _id: Id<"games">;
@@ -197,9 +199,39 @@ function isCardPlayable(
   }
   return true;
 }
-function wealthOf(p: Pick<Player, "money" | "properties">) {
+// ─── Wealth helpers ───────────────────────────────────────────────────
+// Property value alone, pulled out so both wealthOf and the UI badges
+// share one definition instead of re-deriving the same reduce() in three
+// places.
+function propertyValueOf(p: Pick<Player, "properties">) {
+  return (p.properties ?? []).reduce((s, pr) => s + pr.value, 0);
+}
+// Live-priced value of a player's share holdings. Needs the room's current
+// stock prices (priceById) --- falls back to each holding's avgCost for any
+// stock not yet present in the map (e.g. the very first render before the
+// market query resolves), same fallback used inside useStocks.ts.
+function sharesValueOf(
+  p: Pick<Player, "shares">,
+  priceById: Map<string, number>,
+) {
+  return (p.shares ?? []).reduce(
+    (s, h) => s + (priceById.get(h.stockId) ?? h.avgCost) * h.quantity,
+    0,
+  );
+}
+// Total wealth now includes cash + property + savings + live share value ---
+// previously this only counted cash + property, which meant a player who'd
+// parked money in the bank or the stock market looked poorer than they
+// actually were (wrong "richest player" crown, wrong last-card win check).
+function wealthOf(
+  p: Pick<Player, "money" | "properties" | "savings" | "shares">,
+  priceById: Map<string, number>,
+) {
   return (
-    (p.money ?? 0) + (p.properties ?? []).reduce((s, pr) => s + pr.value, 0)
+    (p.money ?? 0) +
+    propertyValueOf(p) +
+    (p.savings ?? 0) +
+    sharesValueOf(p, priceById)
   );
 }
 // ─── Rent additions ─────────────────────────────────────────────────────
@@ -394,6 +426,11 @@ export function GameBoard({
     0,
   );
   const myProperties = myPlayer?.properties ?? [];
+  // ─── Bank additions ─────────────────────────────────────────────────
+  // Source of truth for savings display is the player doc, same pattern
+  // as myMoney/myProperties above --- flows down live from Convex once
+  // useBank's internal deposit/withdraw mutations resolve.
+  const mySavings = myPlayer?.savings ?? 0;
   // ─── Stock market additions ─────────────────────────────────────────
   // Holdings live on the player doc, same pattern as myProperties above.
   // useStocks subscribes to the live market so the StockButton badge can
@@ -406,6 +443,16 @@ export function GameBoard({
     userId: currentUserId,
     holdings: myShares,
   });
+  // ── NEW: live stock prices, shared by every wealth calc below ─────────
+  // Same query useStocks calls internally (Convex dedupes identical
+  // useQuery calls across components, so this is free) --- pulled out here
+  // too so opponents' share holdings can be valued without calling
+  // useStocks per-opponent, which isn't possible inside a .map() anyway
+  // (hooks can't run in a loop/callback).
+  const stockMarket = useQuery(api.stocks.getMarket, { roomId: room._id });
+  const priceById = new Map<string, number>(
+    (stockMarket ?? []).map((s) => [s.id, s.price]),
+  );
   const myPendingProperty = myPlayer?.pendingProperties?.[0];
   const myPendingPropertyQueueLength = myPlayer?.pendingProperties?.length ?? 0;
   // ── NEW: whether the current pending property offer is affordable ──────
@@ -446,20 +493,23 @@ export function GameBoard({
     }
   };
   const richestUserId = players.length
-    ? players.reduce((best, p) => (wealthOf(p) > wealthOf(best) ? p : best))
-        .userId
+    ? players.reduce((best, p) =>
+        wealthOf(p, priceById) > wealthOf(best, priceById) ? p : best,
+      ).userId
     : null;
   const maxOpponentWealth = opponents.length
-    ? Math.max(...opponents.map(wealthOf))
+    ? Math.max(...opponents.map((p) => wealthOf(p, priceById)))
     : -Infinity;
   const isLastCard = (playerHand?.length ?? 0) === 1;
   // Predicts whether playing this specific card (your last one) would win
   // the game, so we can warn the player *before* they commit to it instead
   // of surprising them with a forced draw-2 afterward. Life/property cards
   // can never be your last hand card anymore (they resolve at draw time),
-  // so this is just your current cash + property value.
+  // so this is your current cash + property value + savings + live share
+  // value --- the same four numbers wealthOf() now sums for everyone else.
   const predictLastCardOutcome = () => {
-    const projectedWealth = myMoney + myPropertyValue;
+    const projectedWealth =
+      myMoney + myPropertyValue + mySavings + myPortfolioValue;
     return {
       wouldWin: projectedWealth >= maxOpponentWealth,
       projectedWealth,
@@ -901,7 +951,10 @@ just for readability, not layout. ───────────────�
             // so it's obvious *why* an opponent isn't beatable yet instead
             // of just seeing a property count. ─────────────────────────
             const oppProperties = opp.properties ?? [];
-            const oppWealth = wealthOf(opp);
+            // ─── Bank + Stock market additions ───────────────────────────
+            const oppSavings = opp.savings ?? 0;
+            const oppSharesValue = sharesValueOf(opp, priceById);
+            const oppWealth = wealthOf(opp, priceById);
             const oppWeeklyRent = weeklyRentOf(opp);
             return (
               <motion.div
@@ -966,15 +1019,40 @@ just for readability, not layout. ───────────────�
                       🏠{oppProperties.length}
                     </span>
                   )}
-                  {/* ── NEW: total wealth badge --- cash + everything their
-properties are worth, the same number the "Not the
-richest yet" warning compares you against. Only shown
-once they actually own something, so it doesn't just
-duplicate the cash badge for a property-less opponent. */}
-                  {oppProperties.length > 0 && (
+                  {/* ── NEW: savings badge --- mirrors the player's own
+🏦 Savings badge in the wallet row below. Only shown once
+they've actually got a balance, same "don't duplicate an
+empty state" rule as the other opponent badges. ────────── */}
+                  {oppSavings > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded-full bg-sky-400/20 text-sky-200 font-bold text-[10px]"
+                      title="Savings balance"
+                    >
+                      🏦 <AnimatedCash value={oppSavings} />
+                    </span>
+                  )}
+                  {/* ── NEW: shares badge --- live-priced portfolio value,
+same source (priceById) the wealth badge below is summed
+from, so the two numbers can never disagree. ──────────── */}
+                  {oppSharesValue > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded-full bg-violet-400/20 text-violet-200 font-bold text-[10px]"
+                      title={`${(opp.shares ?? []).reduce((s, h) => s + h.quantity, 0)} share(s) held`}
+                    >
+                      📈 <AnimatedCash value={oppSharesValue} />
+                    </span>
+                  )}
+                  {/* ── NEW: total wealth badge --- cash + property + savings
++ live share value, the same number the "Not the richest
+yet" warning compares you against. Shown once they own
+property, have savings, or hold shares, so it doesn't just
+duplicate the cash badge for a totally empty opponent. */}
+                  {(oppProperties.length > 0 ||
+                    oppSavings > 0 ||
+                    oppSharesValue > 0) && (
                     <span
                       className="px-1.5 py-0.5 rounded-full bg-white/15 text-white/90 font-bold text-[10px]"
-                      title="Total wealth --- cash + property value"
+                      title="Total wealth --- cash + property + savings + shares"
                     >
                       💎 <AnimatedCash value={oppWealth} />
                     </span>
@@ -1392,13 +1470,12 @@ keep you in the game. Avoids surprising forced-draw moments. ── */}
             </motion.p>
           )}
           {/* ── My Wallet & Properties --- cash + owned houses, below the hand ──
-Fixed order: cash → total wealth → rent always sit together on
-row 1 (they're compact, so this stays on one line on desktop
-too). Properties get their own row 2 so they can wrap to full
-width on narrow/mobile screens instead of being squeezed by
-the wallet badges. ─────────────────────────────────────────── */}
+Fixed order: cash → savings → shares → total wealth → rent, all
+on row 1 (compact, wraps on mobile but stays grouped). Properties
+get their own row 2 so they can wrap to full width on narrow
+screens instead of being squeezed by the wallet badges. ──────── */}
           <div className="mt-4 pt-3 border-t border-white/10 flex flex-col items-center gap-1.5 sm:gap-2">
-            {/* Row 1: cash, total wealth, rent --- always in this order */}
+            {/* Row 1: cash, savings, shares, total wealth, rent --- in this order */}
             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
               <div
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold backdrop-blur-sm"
@@ -1418,10 +1495,37 @@ the wallet badges. ────────────────────�
                 {richestUserId === currentUserId ? "👑" : "💰"}{" "}
                 <AnimatedCash value={myMoney} />
               </div>
-              {myPropertyValue > 0 && (
+              {/* ── NEW: savings badge ─────────────────────────────────────── */}
+              {mySavings > 0 && (
+                <div
+                  className="px-2.5 py-1.5 rounded-xl border border-sky-400/30 bg-sky-400/10 text-[11px] font-semibold text-sky-200"
+                  title="Savings balance"
+                >
+                  🏦 Savings: <AnimatedCash value={mySavings} />
+                </div>
+              )}
+              {/* ── NEW: shares badge ──────────────────────────────────────── */}
+              {myPortfolioValue > 0 && (
+                <div
+                  className="px-2.5 py-1.5 rounded-xl border border-violet-400/30 bg-violet-400/10 text-[11px] font-semibold text-violet-200"
+                  title="Live value of your stock holdings"
+                >
+                  📈 Shares: <AnimatedCash value={myPortfolioValue} />
+                </div>
+              )}
+              {/* Total wealth now fires once ANY of property/savings/shares is
+non-zero, not just property --- otherwise a bank/stocks-only
+player never saw a total at all. */}
+              {(myPropertyValue > 0 ||
+                mySavings > 0 ||
+                myPortfolioValue > 0) && (
                 <div className="px-2.5 py-1.5 rounded-xl border border-white/15 bg-white/5 text-[11px] font-semibold text-white/60">
                   Total wealth:{" "}
-                  <AnimatedCash value={myMoney + myPropertyValue} />
+                  <AnimatedCash
+                    value={
+                      myMoney + myPropertyValue + mySavings + myPortfolioValue
+                    }
+                  />
                 </div>
               )}
               {/* ─── Rent additions ────────────────────────────────────────────
@@ -2227,21 +2331,24 @@ Since `money` already comes from the live Convex `players` query,
 this is effectively a no-op passthrough --- Convex will push the
 updated balance down through `players`/`myMoney` automatically
 once the bank mutation resolves, the same way every other action
-on this board (draw, play, upgrade, trade...) already works. If
-your actual useBank hook expects something else here (e.g. it
-wants the setter to call a specific mutation directly instead of
-relying on Convex's live query), let me know and I'll wire that
-in --- I don't have hooks/useBank.ts in front of me to confirm
-its exact contract. */}
+on this board (draw, play, upgrade, trade...) already works.
+initialSavings now seeds from the player doc (mySavings) instead
+of a hardcoded 0 --- previously useBank's local savings state
+always started at 0 even for a player who already had a balance,
+so the modal would show $0 for one render/interaction until its
+own mutations caught it up to the server value. If your actual
+useBank hook expects something else here (e.g. it wants the
+setter to call a specific mutation directly instead of relying
+on Convex's live query), let me know and I'll wire that in --- I
+don't have hooks/useBank.ts in front of me to confirm its exact
+contract. */}
       <BankModal
         open={bankOpen}
         onClose={() => setBankOpen(false)}
+        roomId={room._id}
+        userId={currentUserId}
         cash={myMoney}
-        onCashChange={() => {
-          /* no-op: Convex's live `players` query already keeps `myMoney`
-in sync once useBank's internal mutations resolve. */
-        }}
-        initialSavings={0}
+        savings={mySavings}
         videoSrc="/videos/bank-vault.mp4"
       />
       {/* ── Stock market modal ────────────────────────────────────────────

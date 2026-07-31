@@ -45,11 +45,27 @@ function lifeEvent(cardId: string) {
 function propertyDef(cardId: string) {
   return PROPERTIES.find((p) => p.id === cardId);
 }
-function wealthOf(p: { money?: number; properties?: { value: number }[] }) {
-  return (
-    (p.money ?? 0) + (p.properties ?? []).reduce((s, pr) => s + pr.value, 0)
+function wealthOf(
+  p: {
+    money?: number;
+    properties?: { value: number }[];
+    savings?: number;
+    shares?: { stockId: string; quantity: number; avgCost: number }[];
+  },
+  priceById: Map<string, number>,
+) {
+  const propertyValue = (p.properties ?? []).reduce((s, pr) => s + pr.value, 0);
+  const sharesValue = (p.shares ?? []).reduce(
+    (s, h) => s + (priceById.get(h.stockId) ?? h.avgCost) * h.quantity,
+    0,
   );
+  return (p.money ?? 0) + propertyValue + (p.savings ?? 0) + sharesValue;
 }
+
+function priceMapOf(game: { stockPrices?: { id: string; price: number }[] }) {
+  return new Map((game.stockPrices ?? []).map((p) => [p.id, p.price]));
+}
+
 export function createDeck(): string[] {
   const deck: string[] = [];
   for (const color of COLORS) {
@@ -665,12 +681,11 @@ export const playCard = mutation({
         .query("players")
         .withIndex("by_room", (q) => q.eq("roomId", roomId))
         .collect();
-      const myWealth =
-        (player.money ?? 0) +
-        (player.properties ?? []).reduce((s, pr) => s + pr.value, 0);
+      const priceById = priceMapOf(game);
+      const myWealth = wealthOf(player, priceById);
       const otherWealths = allPlayers
         .filter((p) => p.userId !== userId)
-        .map((p) => wealthOf(p));
+        .map((p) => wealthOf(p, priceById));
       const maxOtherWealth =
         otherWealths.length > 0 ? Math.max(...otherWealths) : -Infinity;
       const eligibleToWin = myWealth >= maxOtherWealth;
@@ -1149,13 +1164,19 @@ export const botTurn = internalMutation({
           .query("players")
           .withIndex("by_room", (q) => q.eq("roomId", roomId))
           .collect();
-        const myWealth = wealthOf({
-          money: botMoney,
-          properties: botProperties,
-        });
+        const priceById = priceMapOf(game);
+        const myWealth = wealthOf(
+          {
+            money: botMoney,
+            properties: botProperties,
+            savings: bot.savings,
+            shares: bot.shares,
+          },
+          priceById,
+        );
         const otherWealths = allPlayers
           .filter((p) => p.userId !== botId)
-          .map((p) => wealthOf(p));
+          .map((p) => wealthOf(p, priceById));
         const maxOtherWealth =
           otherWealths.length > 0 ? Math.max(...otherWealths) : -Infinity;
         const eligibleToWin = myWealth >= maxOtherWealth;
