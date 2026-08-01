@@ -1104,11 +1104,32 @@
 //       botMoney,
 //       difficulty,
 //     );
+//     // NEW — Savings & stocks: give bots the same investing options humans
+//     // have. Runs after upgrades/trades so the buffers see accurate cash.
+//     const stocksResult = resolveBotStocks(
+//       botMoney,
+//       bot.shares ?? [],
+//       priceMapOf(game),
+//       difficulty,
+//       bot.name,
+//     );
+//     botMoney = stocksResult.money;
+//     const botShares = stocksResult.shares;
+//     const savingsResult = resolveBotSavings(
+//       botMoney,
+//       bot.savings ?? 0,
+//       difficulty,
+//       bot.name,
+//     );
+//     botMoney = savingsResult.money;
+//     const botSavings = savingsResult.savings;
 //     const combinedPrefix = [
 //       gambleLastAction,
 //       upgradeLastAction,
 //       tradeResult.label,
 //       proposeTradeLastAction,
+//       stocksResult.label, // NEW
+//       savingsResult.label, // NEW
 //     ]
 //       .filter(Boolean)
 //       .join(" ");
@@ -1180,8 +1201,8 @@
 //           {
 //             money: botMoney,
 //             properties: botProperties,
-//             savings: bot.savings,
-//             shares: bot.shares,
+//             savings: botSavings,
+//             shares: botShares,
 //           },
 //           priceById,
 //         );
@@ -1196,6 +1217,8 @@
 //             hand: [],
 //             money: botMoney,
 //             properties: botProperties,
+//             savings: botSavings, // NEW
+//             shares: botShares, // NEW
 //             ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
 //           });
 //           await ctx.db.patch(game._id, {
@@ -1229,6 +1252,8 @@
 //           hand: [...handCopy, ...resolved.keep],
 //           money: botMoneyAfterDraw + lifeMoneyDelta,
 //           properties: [...botProperties, ...botPropsAfterDraw],
+//           savings: botSavings, // NEW
+//           shares: botShares, // NEW
 //           ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
 //         });
 //         const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
@@ -1255,6 +1280,8 @@
 //         hand: handCopy,
 //         money: botMoney,
 //         properties: botProperties,
+//         savings: botSavings, // NEW
+//         shares: botShares, // NEW
 //         ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
 //       });
 //       const salaryNotice = await paySalaryIfDue(ctx, roomId, newTurnCount);
@@ -1287,6 +1314,8 @@
 //         hand: [...bot.hand, ...resolved.keep],
 //         money: botMoneyAfterDraw + lifeMoneyDelta,
 //         properties: [...botProperties, ...botPropsAfterDraw],
+//         savings: botSavings, // NEW
+//         shares: botShares, // NEW
 //         ...(gamblePulled ? { lastGambleTurn: turnCount } : {}),
 //       });
 //       const numPlayers = game.playerOrder.length;
@@ -1744,18 +1773,25 @@ async function paySalaryIfDue(
   // window where it looks like "not a coach week" while the coach is
   // actually just about to start. paySalaryIfDue doesn't otherwise have
   // the game doc in scope, so fetch its _id here.
+  // AFTER
+  // AFTER
   const game = await ctx.db
     .query("games")
     .withIndex("by_room", (q) => q.eq("roomId", roomId))
     .first();
   if (game) {
+    const at = Date.now();
+    // Bots don't need a commentary row — they never open the modal to
+    // read it, and seeding one just means an unused LLM call later.
+    const humanPlayers = allPlayers.filter((p) => !p.isBot);
     await ctx.db.patch(game._id, {
-      coachCommentary: {
+      coachCommentary: humanPlayers.map((p) => ({
+        userId: p.userId,
         text: "",
-        status: "pending",
+        status: "pending" as const,
         turnCount: newTurnCount,
-        at: Date.now(),
-      },
+        at,
+      })),
     });
   }
   await ctx.scheduler.runAfter(0, internal.coach.generateWeeklyCommentary, {
