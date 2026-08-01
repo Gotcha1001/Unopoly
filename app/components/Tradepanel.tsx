@@ -5,6 +5,7 @@
 // import { Id } from "@/convex/_generated/dataModel";
 // import { toast } from "sonner";
 // import { PropertyIcon } from "./PropertyIcon";
+// import { PropertyMediaHeader } from "./PropertyMediaHeader";
 // import { motion } from "framer-motion";
 // import { useState, useEffect, useRef, useMemo } from "react";
 // import { ConfettiBurst } from "./Confetti";
@@ -548,37 +549,93 @@
 // // holds the screen open until they close it themselves (their "win" moment
 // // is worth pausing on); declining, or letting the clock run out, closes
 // // immediately and auto-declines so an offer can never sit in limbo.
+// interface TradePropertyDetail {
+//   id: string;
+//   name: string;
+// }
+
 // interface IncomingTrade {
 //   _id: Id<"trades">;
 //   fromName: string;
 //   offerPropertyIds: string[];
+//   offerPropertyDetails?: TradePropertyDetail[];
 //   offerCash: number;
 //   requestPropertyIds: string[];
+//   requestPropertyDetails?: TradePropertyDetail[];
 //   requestCash: number;
 // }
 
-// function describeTrade(t: {
-//   offerPropertyIds: string[];
-//   offerCash: number;
-//   requestPropertyIds: string[];
-//   requestCash: number;
+// // Renders a trade's "side" (what's being given or asked for) as icon+name
+// // chips for properties plus a plain cash badge — used by the countdown
+// // popup, the outgoing-offer popup, and the inbox list, so all three name
+// // the actual property instead of falling back to "1 property".
+// function TradeItemsRow({
+//   properties,
+//   propertyIds,
+//   cash,
+//   accent,
+// }: {
+//   properties?: TradePropertyDetail[];
+//   propertyIds: string[];
+//   cash: number;
+//   accent: "give" | "get";
 // }) {
-//   const give: string[] = [];
-//   if (t.offerPropertyIds.length)
-//     give.push(
-//       `${t.offerPropertyIds.length} propert${t.offerPropertyIds.length === 1 ? "y" : "ies"}`,
-//     );
-//   if (t.offerCash) give.push(`$${t.offerCash.toLocaleString()}`);
-//   const get: string[] = [];
-//   if (t.requestPropertyIds.length)
-//     get.push(
-//       `${t.requestPropertyIds.length} propert${t.requestPropertyIds.length === 1 ? "y" : "ies"}`,
-//     );
-//   if (t.requestCash) get.push(`$${t.requestCash.toLocaleString()}`);
-//   return {
-//     give: give.join(" + ") || "nothing",
-//     get: get.join(" + ") || "nothing",
-//   };
+//   const chipClass =
+//     accent === "give"
+//       ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+//       : "border-amber-400/30 bg-amber-400/10 text-amber-200";
+//   const cashClass = accent === "give" ? "text-emerald-300" : "text-amber-300";
+
+//   const hasProps = propertyIds.length > 0;
+//   if (!hasProps && !cash) {
+//     return <span className="text-white/40">nothing</span>;
+//   }
+
+//   return (
+//     <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+//       {hasProps &&
+//         (properties?.length ? (
+//           properties.map((p, i) => (
+//             <span
+//               key={`${p.id}-${i}`}
+//               className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-semibold ${chipClass}`}
+//             >
+//               <PropertyIcon
+//                 propertyId={p.id}
+//                 className="h-4 w-4 rounded object-cover"
+//               />
+//               {p.name}
+//             </span>
+//           ))
+//         ) : (
+//           // Fallback for older trades created before this field existed
+//           <span
+//             className={`rounded-full border px-1.5 py-0.5 text-[11px] font-semibold ${chipClass}`}
+//           >
+//             {propertyIds.length} propert{propertyIds.length === 1 ? "y" : "ies"}
+//           </span>
+//         ))}
+//       {cash > 0 && (
+//         <span className={`text-[11px] font-semibold ${cashClass}`}>
+//           ${cash.toLocaleString()}
+//         </span>
+//       )}
+//     </span>
+//   );
+// }
+
+// // The single property to feature as a big video header on the incoming
+// // offer popup -- this is what makes "the bot offers ... for one of your
+// // properties" become "the bot offers ... for Maple Cottage" with a clip
+// // of the actual place. Only shown when the trade points at exactly one
+// // property overall (the common bot case: cash for one specific property);
+// // multi-property trades fall back to the icon+name chips below instead.
+// function spotlightProperty(trade: IncomingTrade): TradePropertyDetail | null {
+//   const request = trade.requestPropertyDetails ?? [];
+//   const offer = trade.offerPropertyDetails ?? [];
+//   if (request.length === 1 && offer.length === 0) return request[0];
+//   if (offer.length === 1 && request.length === 0) return offer[0];
+//   return null;
 // }
 
 // const COUNTDOWN_SECONDS = 10;
@@ -599,7 +656,7 @@
 //   const [resolving, setResolving] = useState<"accept" | "decline" | null>(null);
 //   const [showConfetti, setShowConfetti] = useState(false);
 //   const settledRef = useRef(false);
-//   const d = describeTrade(trade);
+//   const spotlight = spotlightProperty(trade);
 
 //   const settle = async (accept: boolean, reason?: "timeout") => {
 //     if (settledRef.current) return;
@@ -650,6 +707,16 @@
 //             "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(147,51,234,0.35)",
 //         }}
 //       >
+//         {spotlight && (
+//           <div className="relative -mx-6 -mt-6 mb-4 h-32 overflow-hidden rounded-t-3xl">
+//             <PropertyMediaHeader propertyId={spotlight.id} heightClass="h-32" />
+//             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent px-3 pb-2 pt-8">
+//               <p className="text-sm font-black text-white drop-shadow">
+//                 {spotlight.name}
+//               </p>
+//             </div>
+//           </div>
+//         )}
 //         {resolving === "accept" ? (
 //           <div className="py-4">
 //             <div className="mb-2 text-4xl">🎉</div>
@@ -699,11 +766,21 @@
 //             <h2 className="mb-1 text-lg font-black">
 //               🤝 {trade.fromName} made you an offer!
 //             </h2>
-//             <p className="mb-5 text-sm text-white/70">
+//             <p className="mb-5 flex flex-wrap items-center justify-center gap-1 text-sm text-white/70">
 //               Gives you{" "}
-//               <span className="font-semibold text-emerald-300">{d.give}</span>{" "}
+//               <TradeItemsRow
+//                 properties={trade.offerPropertyDetails}
+//                 propertyIds={trade.offerPropertyIds}
+//                 cash={trade.offerCash}
+//                 accent="give"
+//               />{" "}
 //               for your{" "}
-//               <span className="font-semibold text-amber-300">{d.get}</span>
+//               <TradeItemsRow
+//                 properties={trade.requestPropertyDetails}
+//                 propertyIds={trade.requestPropertyIds}
+//                 cash={trade.requestCash}
+//                 accent="get"
+//               />
 //             </p>
 //             <div className="flex gap-2">
 //               <button
@@ -800,6 +877,22 @@
 //             "0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(147,51,234,0.35)",
 //         }}
 //       >
+//         <p className="mb-4 flex flex-wrap items-center justify-center gap-1 text-xs text-white/60">
+//           You give{" "}
+//           <TradeItemsRow
+//             properties={trade.offerPropertyDetails}
+//             propertyIds={trade.offerPropertyIds}
+//             cash={trade.offerCash}
+//             accent="give"
+//           />{" "}
+//           for their{" "}
+//           <TradeItemsRow
+//             properties={trade.requestPropertyDetails}
+//             propertyIds={trade.requestPropertyIds}
+//             cash={trade.requestCash}
+//             accent="get"
+//           />
+//         </p>
 //         {trade.status === "pending" && (
 //           <>
 //             <div className="relative mx-auto mb-3 h-20 w-20">
@@ -881,13 +974,6 @@
 
 //   const activeTrade = incoming.find((t) => t._id === activePopupId) ?? null;
 
-//   const describe = (t: {
-//     offerPropertyIds: string[];
-//     offerCash: number;
-//     requestPropertyIds: string[];
-//     requestCash: number;
-//   }) => describeTrade(t);
-
 //   if (total === 0) return null;
 
 //   return (
@@ -910,17 +996,27 @@
 //                 Offers for you
 //               </h4>
 //               {incoming.map((t) => {
-//                 const d = describe(t);
 //                 return (
 //                   <div
 //                     key={t._id}
 //                     className="mb-2 rounded-lg border border-white/10 bg-white/5 p-2 text-xs"
 //                   >
 //                     <p className="mb-1 font-semibold">{t.fromName} offers:</p>
-//                     <p className="text-white/70">
+//                     <p className="flex flex-wrap items-center gap-1 text-white/70">
 //                       Gives you{" "}
-//                       <span className="text-emerald-300">{d.give}</span> for
-//                       your <span className="text-amber-300">{d.get}</span>
+//                       <TradeItemsRow
+//                         properties={t.offerPropertyDetails}
+//                         propertyIds={t.offerPropertyIds}
+//                         cash={t.offerCash}
+//                         accent="give"
+//                       />{" "}
+//                       for your{" "}
+//                       <TradeItemsRow
+//                         properties={t.requestPropertyDetails}
+//                         propertyIds={t.requestPropertyIds}
+//                         cash={t.requestCash}
+//                         accent="get"
+//                       />
 //                     </p>
 //                     <div className="mt-1.5 flex gap-1.5">
 //                       <button
@@ -977,17 +1073,27 @@
 //                 Your pending offers
 //               </h4>
 //               {outgoing.map((t) => {
-//                 const d = describe(t);
 //                 return (
 //                   <div
 //                     key={t._id}
 //                     className="mb-2 rounded-lg border border-white/10 bg-white/5 p-2 text-xs"
 //                   >
 //                     <p className="mb-1 font-semibold">To {t.toName}:</p>
-//                     <p className="text-white/70">
+//                     <p className="flex flex-wrap items-center gap-1 text-white/70">
 //                       You give{" "}
-//                       <span className="text-emerald-300">{d.give}</span> for{" "}
-//                       <span className="text-amber-300">{d.get}</span>
+//                       <TradeItemsRow
+//                         properties={t.offerPropertyDetails}
+//                         propertyIds={t.offerPropertyIds}
+//                         cash={t.offerCash}
+//                         accent="give"
+//                       />{" "}
+//                       for{" "}
+//                       <TradeItemsRow
+//                         properties={t.requestPropertyDetails}
+//                         propertyIds={t.requestPropertyIds}
+//                         cash={t.requestCash}
+//                         accent="get"
+//                       />
 //                     </p>
 //                     <button
 //                       onClick={async () => {
@@ -1026,7 +1132,6 @@
 //     </div>
 //   );
 // }
-
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
@@ -1863,21 +1968,33 @@ export function OutgoingOfferPopup({
   const trade = useQuery(api.trades.getTrade, { tradeId });
   const closedRef = useRef(false);
 
+  // Keep the latest onDone without making the effect below depend on its
+  // identity — the parent passes an inline arrow function that's a new
+  // reference every render, which would otherwise tear the effect down
+  // and cancel the pending close before it ever fires.
+  const onDoneRef = useRef(onDone);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
+
   // Side effect: once the trade lands on a final status, schedule the
-  // auto-close. This is the only thing that actually needs an effect —
-  // everything else below is derived straight from `trade` during render.
+  // auto-close. Depend only on trade?.status (a primitive) — Convex's
+  // live query gives `trade` a new object identity on nearly every poll,
+  // and depending on the object itself would re-run this effect (and
+  // clear the in-flight timeout) constantly, so the popup would never
+  // actually close.
   useEffect(() => {
     if (!trade || closedRef.current) return;
     if (trade.status === "accepted" || trade.status === "declined") {
       closedRef.current = true;
-      const t = setTimeout(onDone, 2600);
+      const t = setTimeout(() => onDoneRef.current(), 2600);
       return () => clearTimeout(t);
     }
     if (trade.status === "cancelled") {
       closedRef.current = true;
-      onDone();
+      onDoneRef.current();
     }
-  }, [trade, onDone]);
+  }, [trade?.status]);
 
   if (!trade) return null;
 

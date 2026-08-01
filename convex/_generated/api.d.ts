@@ -16,6 +16,7 @@ import type * as rooms from "../rooms.js";
 import type * as stocks from "../stocks.js";
 import type * as trades from "../trades.js";
 import type * as user from "../user.js";
+import type * as winCoach from "../winCoach.js";
 
 import type {
   ApiFromModules,
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   stocks: typeof stocks;
   trades: typeof trades;
   user: typeof user;
+  winCoach: typeof winCoach;
 }>;
 
 /**

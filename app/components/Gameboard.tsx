@@ -259,6 +259,39 @@
 // };
 // const TABLE_BG =
 //   "radial-gradient(ellipse at 50% 40%, #1a4a2e 0%, #0f2d1c 45%, #091a10 100%)";
+// // ─── Helper: useTypewriter ──────────────────────────────────────────────
+// // Streams a string in one character at a time, restarting whenever the
+// // input text changes (e.g. every new "lastAction" line from the server).
+// // Returns the text revealed so far; the caller decides how/whether to
+// // show a blinking cursor while `text` hasn't fully revealed yet.
+// function useTypewriter(text: string, speedMs: number = 18) {
+//   const [prevText, setPrevText] = useState(text);
+//   const [displayed, setDisplayed] = useState("");
+
+//   // Reset synchronously during render when the input text changes. This
+//   // is React's recommended way to "adjust state when a prop changes" —
+//   // it avoids calling setState directly in the Effect body below, which
+//   // is what triggers the "cascading renders" warning. The Effect itself
+//   // only calls setState from inside the interval's callback, which is
+//   // the supported "subscribe to an external timer" pattern.
+//   if (text !== prevText) {
+//     setPrevText(text);
+//     setDisplayed("");
+//   }
+
+//   useEffect(() => {
+//     if (!text) return;
+//     let i = 0;
+//     const interval = setInterval(() => {
+//       i += 1;
+//       setDisplayed(text.slice(0, i));
+//       if (i >= text.length) clearInterval(interval);
+//     }, speedMs);
+//     return () => clearInterval(interval);
+//   }, [text, speedMs]);
+
+//   return displayed;
+// }
 // // ─── Component ────────────────────────────────────────────────────────────
 // export function GameBoard({
 //   room,
@@ -323,10 +356,15 @@
 //   // helpers, since internal functions can't be called from the client.
 //   // Returns: undefined while loading, null if there's no line for this
 //   // payday (e.g. not this week's "coach week"), or the quip itself.
+//   // AFTER
 //   const coachData = useQuery(
 //     api.coachData.getCommentary,
 //     salaryModal
-//       ? { roomId: room._id, turnCount: salaryModal.turnCount }
+//       ? {
+//           roomId: room._id,
+//           turnCount: salaryModal.turnCount,
+//           userId: currentUserId,
+//         }
 //       : "skip",
 //   );
 //   // coachData is now: undefined (Convex's own initial-fetch loading state,
@@ -340,6 +378,13 @@
 //     !!coachData &&
 //     typeof coachData === "object" &&
 //     streamedText.length < coachData.text.length;
+//   // ─── Per-move commentary pill (the black/white "Game started!" /
+//   // "X played a +2" strip) — streams in one character at a time whenever
+//   // game.lastAction changes, instead of snapping into place. ───────────
+//   const lastActionText = game.lastAction ?? "Game started!";
+//   const streamedLastAction = useTypewriter(lastActionText, 36);
+//   const lastActionStillStreaming =
+//     streamedLastAction.length < lastActionText.length;
 //   const { selected: boardBg } = useBackground();
 //   // Ref for the discard pile drop target
 //   const discardRef = useRef<HTMLDivElement>(null);
@@ -1119,9 +1164,21 @@
 //               animate={{ opacity: 1, y: 0, scale: 1 }}
 //               exit={{ opacity: 0, y: 8, scale: 0.95 }}
 //               transition={{ duration: 0.25 }}
-//               className="text-xs text-center px-4 py-2 rounded-xl max-w-sm border border-white/15 bg-black/30 backdrop-blur-sm text-white/70"
+//               className="text-xs text-center px-4 py-2 rounded-xl max-w-sm font-semibold"
+//               style={{
+//                 backgroundColor: "#000000",
+//                 border: "1px solid #ffffff",
+//                 color: "#ffffff",
+//               }}
 //             >
-//               {game.lastAction ?? "Game started!"}
+//               {streamedLastAction}
+//               {lastActionStillStreaming && (
+//                 <motion.span
+//                   className="inline-block w-[6px] h-3 ml-0.5 align-middle bg-white"
+//                   animate={{ opacity: [1, 0, 1] }}
+//                   transition={{ duration: 0.7, repeat: Infinity }}
+//                 />
+//               )}
 //             </motion.div>
 //           </AnimatePresence>
 //           <AnimatePresence mode="wait">
@@ -2144,56 +2201,152 @@
 //                   still playing!
 //                 </p>
 //                 {/* ─── AI coach commentary — three real states now:
-// undefined/pending -> please wait, streaming -> text grows
-// live with a blinking cursor, done -> settled text.
-// coachData === null means genuinely not a coach week, so
-// nothing renders and the layout doesn't shift. ─────── */}
+// undefined/pending -> please wait, streaming -> words fade in one at a
+// time on a pure-black "live feed" card with a blinking terminal cursor,
+// done -> settled text. coachData === null means genuinely not a coach
+// week, so nothing renders and the layout doesn't shift. ─────── */}
 //                 {coachData !== null && (
-//                   <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-xl bg-black/30 border border-violet-400/25 text-left">
-//                     <span className="text-base leading-none mt-0.5">🔮</span>
-//                     {coachData === undefined ||
-//                     coachData.status === "pending" ? (
-//                       <div className="flex-1 flex items-center gap-1.5 py-0.5">
-//                         <span className="text-xs text-violet-200/70 italic">
-//                           The coach is contemplating your fortune
-//                         </span>
-//                         <motion.span className="flex gap-0.5" initial="hidden">
-//                           {[0, 1, 2].map((i) => (
+//                   <motion.div
+//                     initial={{ opacity: 0, y: 6 }}
+//                     animate={{ opacity: 1, y: 0 }}
+//                     className="relative mb-5 px-4 py-3 rounded-xl text-left overflow-hidden"
+//                     style={{
+//                       background: "#000",
+//                       border: "1px solid rgba(168,85,247,0.35)",
+//                       boxShadow:
+//                         "0 0 0 1px rgba(255,255,255,0.04) inset, 0 8px 24px rgba(0,0,0,0.6)",
+//                     }}
+//                   >
+//                     {/* soft scanning glow sweep so the card reads as a live feed */}
+//                     <motion.div
+//                       aria-hidden
+//                       className="absolute inset-y-0 w-24 pointer-events-none"
+//                       style={{
+//                         background:
+//                           "linear-gradient(90deg, transparent, rgba(168,85,247,0.18), transparent)",
+//                       }}
+//                       animate={{ x: ["-6rem", "22rem"] }}
+//                       transition={{
+//                         duration: 2.4,
+//                         repeat: Infinity,
+//                         ease: "linear",
+//                       }}
+//                     />
+//                     <div className="relative flex items-start gap-2">
+//                       <span className="text-base leading-none mt-0.5">🔮</span>
+//                       <div className="flex-1 min-w-0">
+//                         <div className="flex items-center gap-1.5 mb-1.5">
+//                           <motion.span
+//                             className="w-1.5 h-1.5 rounded-full bg-emerald-400"
+//                             style={{
+//                               boxShadow: "0 0 6px rgba(52,211,153,0.9)",
+//                             }}
+//                             animate={{ opacity: [1, 0.4, 1] }}
+//                             transition={{ duration: 1.6, repeat: Infinity }}
+//                           />
+//                           <span className="text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold">
+//                             Mad Hatter — live
+//                           </span>
+//                         </div>
+//                         {coachData === undefined ||
+//                         coachData.status === "pending" ? (
+//                           <div className="flex items-center gap-1.5 py-0.5">
+//                             <span className="text-xs text-white/60 italic">
+//                               The coach is contemplating your fortune
+//                             </span>
 //                             <motion.span
-//                               key={i}
-//                               className="w-1 h-1 rounded-full bg-violet-300/80"
-//                               animate={{ opacity: [0.2, 1, 0.2] }}
-//                               transition={{
-//                                 duration: 1,
-//                                 repeat: Infinity,
-//                                 delay: i * 0.15,
-//                               }}
-//                             />
-//                           ))}
-//                         </motion.span>
-//                       </div>
-//                     ) : (
-//                       <p className="text-xs text-white/80 italic leading-snug">
-//                         {streamedText}
-//                         {coachStillCatchingUp && (
-//                           <span className="inline-block w-[2px] h-3 ml-0.5 align-middle bg-violet-300 animate-pulse" />
+//                               className="flex gap-0.5"
+//                               initial="hidden"
+//                             >
+//                               {[0, 1, 2].map((i) => (
+//                                 <motion.span
+//                                   key={i}
+//                                   className="w-1 h-1 rounded-full bg-white/60"
+//                                   animate={{ opacity: [0.2, 1, 0.2] }}
+//                                   transition={{
+//                                     duration: 1,
+//                                     repeat: Infinity,
+//                                     delay: i * 0.15,
+//                                   }}
+//                                 />
+//                               ))}
+//                             </motion.span>
+//                           </div>
+//                         ) : (
+//                           <p className="text-xs text-white italic leading-snug font-medium">
+//                             <AnimatePresence initial={false}>
+//                               {streamedText
+//                                 .split(" ")
+//                                 .filter((w) => w.length > 0)
+//                                 .map((word, i) => (
+//                                   <motion.span
+//                                     key={i}
+//                                     initial={{
+//                                       opacity: 0,
+//                                       y: 4,
+//                                       filter: "blur(3px)",
+//                                     }}
+//                                     animate={{
+//                                       opacity: 1,
+//                                       y: 0,
+//                                       filter: "blur(0px)",
+//                                     }}
+//                                     transition={{
+//                                       duration: 0.28,
+//                                       ease: "easeOut",
+//                                     }}
+//                                     className="inline-block mr-1"
+//                                   >
+//                                     {word}
+//                                   </motion.span>
+//                                 ))}
+//                             </AnimatePresence>
+//                             {coachStillCatchingUp && (
+//                               <motion.span
+//                                 className="inline-block w-[6px] h-3 ml-0.5 align-middle bg-white"
+//                                 animate={{ opacity: [1, 0, 1] }}
+//                                 transition={{ duration: 0.8, repeat: Infinity }}
+//                               />
+//                             )}
+//                           </p>
 //                         )}
-//                       </p>
-//                     )}
-//                   </div>
+//                       </div>
+//                     </div>
+//                   </motion.div>
 //                 )}
-//                 <motion.button
-//                   whileHover={{ scale: 1.05 }}
-//                   whileTap={{ scale: 0.95 }}
-//                   className="px-6 py-2.5 rounded-xl font-bold text-white"
-//                   style={{
-//                     background: "linear-gradient(145deg, #a855f7, #4f46e5)",
-//                     boxShadow: "0 0 24px rgba(168,85,247,0.45)",
-//                   }}
-//                   onClick={() => setSalaryModal(null)}
-//                 >
-//                   Nice!
-//                 </motion.button>
+
+//                 {(() => {
+//                   // Only gate closing when there IS commentary running for this payday.
+//                   // coachData === null means it's genuinely not a coach turn, so the
+//                   // button behaves exactly as before.
+//                   const waitingOnHatter =
+//                     coachData !== null &&
+//                     (coachData === undefined || coachData.status !== "done");
+
+//                   return (
+//                     <motion.button
+//                       whileHover={waitingOnHatter ? undefined : { scale: 1.05 }}
+//                       whileTap={waitingOnHatter ? undefined : { scale: 0.95 }}
+//                       disabled={waitingOnHatter}
+//                       aria-disabled={waitingOnHatter}
+//                       className="px-6 py-2.5 rounded-xl font-bold text-white transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+//                       style={{
+//                         background: "linear-gradient(145deg, #a855f7, #4f46e5)",
+//                         boxShadow: waitingOnHatter
+//                           ? "none"
+//                           : "0 0 24px rgba(168,85,247,0.45)",
+//                       }}
+//                       onClick={() => {
+//                         if (waitingOnHatter) return;
+//                         setSalaryModal(null);
+//                       }}
+//                     >
+//                       {waitingOnHatter
+//                         ? "The Hatter is still talking…"
+//                         : "Nice!"}
+//                     </motion.button>
+//                   );
+//                 })()}
 //               </div>
 //             </motion.div>
 //           </motion.div>
@@ -2449,7 +2602,6 @@
 //     </div>
 //   );
 // }
-
 "use client";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -2711,6 +2863,39 @@ const COLOR_GLOW: Record<string, string> = {
 };
 const TABLE_BG =
   "radial-gradient(ellipse at 50% 40%, #1a4a2e 0%, #0f2d1c 45%, #091a10 100%)";
+// ─── Helper: useTypewriter ──────────────────────────────────────────────
+// Streams a string in one character at a time, restarting whenever the
+// input text changes (e.g. every new "lastAction" line from the server).
+// Returns the text revealed so far; the caller decides how/whether to
+// show a blinking cursor while `text` hasn't fully revealed yet.
+function useTypewriter(text: string, speedMs: number = 18) {
+  const [prevText, setPrevText] = useState(text);
+  const [displayed, setDisplayed] = useState("");
+
+  // Reset synchronously during render when the input text changes. This
+  // is React's recommended way to "adjust state when a prop changes" —
+  // it avoids calling setState directly in the Effect body below, which
+  // is what triggers the "cascading renders" warning. The Effect itself
+  // only calls setState from inside the interval's callback, which is
+  // the supported "subscribe to an external timer" pattern.
+  if (text !== prevText) {
+    setPrevText(text);
+    setDisplayed("");
+  }
+
+  useEffect(() => {
+    if (!text) return;
+    let i = 0;
+    const interval = setInterval(() => {
+      i += 1;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) clearInterval(interval);
+    }, speedMs);
+    return () => clearInterval(interval);
+  }, [text, speedMs]);
+
+  return displayed;
+}
 // ─── Component ────────────────────────────────────────────────────────────
 export function GameBoard({
   room,
@@ -2797,6 +2982,13 @@ export function GameBoard({
     !!coachData &&
     typeof coachData === "object" &&
     streamedText.length < coachData.text.length;
+  // ─── Per-move commentary pill (the black/white "Game started!" /
+  // "X played a +2" strip) — streams in one character at a time whenever
+  // game.lastAction changes, instead of snapping into place. ───────────
+  const lastActionText = game.lastAction ?? "Game started!";
+  const streamedLastAction = useTypewriter(lastActionText, 36);
+  const lastActionStillStreaming =
+    streamedLastAction.length < lastActionText.length;
   const { selected: boardBg } = useBackground();
   // Ref for the discard pile drop target
   const discardRef = useRef<HTMLDivElement>(null);
@@ -3576,9 +3768,49 @@ new. ─────────────────────────
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.95 }}
               transition={{ duration: 0.25 }}
-              className="text-xs text-center px-4 py-2 rounded-xl max-w-sm border border-white/15 bg-black/30 backdrop-blur-sm text-white/70"
             >
-              {game.lastAction ?? "Game started!"}
+              {/* Yellow glow lives as an INSET box-shadow (glows inward,
+              hugging the inside of the border) rather than an outward
+              blur — this container sits inside several ancestors with
+              overflow-hidden/overflow-y-auto, which clip anything that
+              bleeds past the pill's own box. An inset shadow stays fully
+              within the box, so it can never get clipped. The pulse is a
+              plain CSS @keyframes animation (more reliable for animating
+              box-shadow than JS-driven interpolation). */}
+              <style>{`
+                @keyframes lastActionGlowPulse {
+                  0%, 100% {
+                    box-shadow:
+                      inset 0 0 10px rgba(250,204,21,0.55),
+                      inset 0 0 22px rgba(250,204,21,0.3),
+                      0 0 8px rgba(250,204,21,0.45);
+                  }
+                  50% {
+                    box-shadow:
+                      inset 0 0 16px rgba(250,204,21,0.9),
+                      inset 0 0 34px rgba(250,204,21,0.55),
+                      0 0 14px rgba(250,204,21,0.7);
+                  }
+                }
+              `}</style>
+              <div
+                className="text-xs text-center px-4 py-2 rounded-xl max-w-sm font-semibold"
+                style={{
+                  backgroundColor: "#000000",
+                  border: "1px solid #ffffff",
+                  color: "#ffffff",
+                  animation: "lastActionGlowPulse 2.2s ease-in-out infinite",
+                }}
+              >
+                {streamedLastAction}
+                {lastActionStillStreaming && (
+                  <motion.span
+                    className="inline-block w-[6px] h-3 ml-0.5 align-middle bg-white"
+                    animate={{ opacity: [1, 0, 1] }}
+                    transition={{ duration: 0.7, repeat: Infinity }}
+                  />
+                )}
+              </div>
             </motion.div>
           </AnimatePresence>
           <AnimatePresence mode="wait">
@@ -4601,43 +4833,118 @@ timeout" heartbeat. Purely decorative, pointer-events off. */}
                   still playing!
                 </p>
                 {/* ─── AI coach commentary — three real states now:
-undefined/pending -> please wait, streaming -> text grows
-live with a blinking cursor, done -> settled text.
-coachData === null means genuinely not a coach week, so
-nothing renders and the layout doesn't shift. ─────── */}
+undefined/pending -> please wait, streaming -> words fade in one at a
+time on a pure-black "live feed" card with a blinking terminal cursor,
+done -> settled text. coachData === null means genuinely not a coach
+week, so nothing renders and the layout doesn't shift. ─────── */}
                 {coachData !== null && (
-                  <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-xl bg-black/30 border border-violet-400/25 text-left">
-                    <span className="text-base leading-none mt-0.5">🔮</span>
-                    {coachData === undefined ||
-                    coachData.status === "pending" ? (
-                      <div className="flex-1 flex items-center gap-1.5 py-0.5">
-                        <span className="text-xs text-violet-200/70 italic">
-                          The coach is contemplating your fortune
-                        </span>
-                        <motion.span className="flex gap-0.5" initial="hidden">
-                          {[0, 1, 2].map((i) => (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="relative mb-5 px-4 py-3 rounded-xl text-left overflow-hidden"
+                    style={{
+                      background: "#000",
+                      border: "1px solid rgba(168,85,247,0.35)",
+                      boxShadow:
+                        "0 0 0 1px rgba(255,255,255,0.04) inset, 0 8px 24px rgba(0,0,0,0.6)",
+                    }}
+                  >
+                    {/* soft scanning glow sweep so the card reads as a live feed */}
+                    <motion.div
+                      aria-hidden
+                      className="absolute inset-y-0 w-24 pointer-events-none"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, transparent, rgba(168,85,247,0.18), transparent)",
+                      }}
+                      animate={{ x: ["-6rem", "22rem"] }}
+                      transition={{
+                        duration: 2.4,
+                        repeat: Infinity,
+                        ease: "linear",
+                      }}
+                    />
+                    <div className="relative flex items-start gap-2">
+                      <span className="text-base leading-none mt-0.5">🔮</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <motion.span
+                            className="w-1.5 h-1.5 rounded-full bg-emerald-400"
+                            style={{
+                              boxShadow: "0 0 6px rgba(52,211,153,0.9)",
+                            }}
+                            animate={{ opacity: [1, 0.4, 1] }}
+                            transition={{ duration: 1.6, repeat: Infinity }}
+                          />
+                          <span className="text-[10px] uppercase tracking-[0.2em] text-white/40 font-bold">
+                            Mad Hatter — live
+                          </span>
+                        </div>
+                        {coachData === undefined ||
+                        coachData.status === "pending" ? (
+                          <div className="flex items-center gap-1.5 py-0.5">
+                            <span className="text-xs text-white/60 italic">
+                              The coach is contemplating your fortune
+                            </span>
                             <motion.span
-                              key={i}
-                              className="w-1 h-1 rounded-full bg-violet-300/80"
-                              animate={{ opacity: [0.2, 1, 0.2] }}
-                              transition={{
-                                duration: 1,
-                                repeat: Infinity,
-                                delay: i * 0.15,
-                              }}
-                            />
-                          ))}
-                        </motion.span>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-white/80 italic leading-snug">
-                        {streamedText}
-                        {coachStillCatchingUp && (
-                          <span className="inline-block w-[2px] h-3 ml-0.5 align-middle bg-violet-300 animate-pulse" />
+                              className="flex gap-0.5"
+                              initial="hidden"
+                            >
+                              {[0, 1, 2].map((i) => (
+                                <motion.span
+                                  key={i}
+                                  className="w-1 h-1 rounded-full bg-white/60"
+                                  animate={{ opacity: [0.2, 1, 0.2] }}
+                                  transition={{
+                                    duration: 1,
+                                    repeat: Infinity,
+                                    delay: i * 0.15,
+                                  }}
+                                />
+                              ))}
+                            </motion.span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-white italic leading-snug font-medium">
+                            <AnimatePresence initial={false}>
+                              {streamedText
+                                .split(" ")
+                                .filter((w) => w.length > 0)
+                                .map((word, i) => (
+                                  <motion.span
+                                    key={i}
+                                    initial={{
+                                      opacity: 0,
+                                      y: 4,
+                                      filter: "blur(3px)",
+                                    }}
+                                    animate={{
+                                      opacity: 1,
+                                      y: 0,
+                                      filter: "blur(0px)",
+                                    }}
+                                    transition={{
+                                      duration: 0.28,
+                                      ease: "easeOut",
+                                    }}
+                                    className="inline-block mr-1"
+                                  >
+                                    {word}
+                                  </motion.span>
+                                ))}
+                            </AnimatePresence>
+                            {coachStillCatchingUp && (
+                              <motion.span
+                                className="inline-block w-[6px] h-3 ml-0.5 align-middle bg-white"
+                                animate={{ opacity: [1, 0, 1] }}
+                                transition={{ duration: 0.8, repeat: Infinity }}
+                              />
+                            )}
+                          </p>
                         )}
-                      </p>
-                    )}
-                  </div>
+                      </div>
+                    </div>
+                  </motion.div>
                 )}
 
                 {(() => {
