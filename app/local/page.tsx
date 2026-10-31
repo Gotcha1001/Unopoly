@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSoundManager } from "@/hooks/useSoundManager";
+import { formatActionText } from "@/lib/formatActionText";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type CardColor = "red" | "blue" | "green" | "yellow" | "wild";
@@ -797,7 +798,7 @@ function GameScreen({
               exit={{ opacity: 0, y: 8 }}
               className="text-xs text-center px-4 py-2 rounded-xl max-w-xs border border-white/15 bg-black/30 backdrop-blur-sm text-white/70"
             >
-              {gameState.lastAction}
+              {formatActionText(gameState.lastAction)}
             </motion.div>
           </AnimatePresence>
 
@@ -845,7 +846,7 @@ function GameScreen({
               </span>
             </div>
             <div className="px-3 py-1.5 rounded-xl bg-black/30 border border-white/15 text-xs text-white/60">
-              {gameState.direction === 1 ? "↻ CW" : "↺ CCW"}
+              {gameState.direction === 1 ? "↻" : "↺"}
             </div>
             {gameState.drawStack > 0 && (
               <motion.div
