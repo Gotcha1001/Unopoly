@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Trophy, Swords, Clock, Hash } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
+import { formatActionText } from "@/lib/formatActionText";
 
 interface Game {
   _id: Id<"games">;
@@ -187,7 +188,7 @@ export default function HistoryPage() {
                     </span>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-purple-400 truncate">
-                    {game.lastAction ?? "Game finished"}
+                    {formatActionText(game.lastAction ?? "Game finished")}
                   </p>
                 </div>
 
